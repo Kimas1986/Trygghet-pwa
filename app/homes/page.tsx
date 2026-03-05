@@ -1,5 +1,5 @@
 "use client";
-export const dynamic = "force-dynamic";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -23,6 +23,7 @@ type HomeRow = {
     triggered_at: string | null;
   };
 
+  // siste alert (nyeste), uansett ack/open
   latest_alert?: null | {
     alert_id: string;
     type: string | null;
@@ -113,32 +114,54 @@ function isSystemOnline(lastSeenIso: string | null) {
   const d = new Date(lastSeenIso);
   if (Number.isNaN(d.getTime())) return false;
 
-  // Heartbeat innen 90 min => online (juster om du vil)
+  // Heartbeat innen 90 min => online
   const minutes = (Date.now() - d.getTime()) / 60000;
   return minutes <= 90;
 }
 
-// ✅ PWA install prompt typing (Chrome/Edge/Android)
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
-};
-
-function isIos() {
-  if (typeof window === "undefined") return false;
-  const ua = window.navigator.userAgent.toLowerCase();
-  return /iphone|ipad|ipod/.test(ua);
+// ---- PUSH helpers ----
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
 }
 
-function isInStandaloneMode() {
-  if (typeof window === "undefined") return false;
-  // iOS Safari:
-  const nav = window.navigator as any;
-  const iOSStandalone = Boolean(nav.standalone);
-  // Chrome/Edge:
-  const mqStandalone = window.matchMedia?.("(display-mode: standalone)")?.matches;
-  return iOSStandalone || Boolean(mqStandalone);
+async function ensurePushSubscription(accessToken: string) {
+  if (!("serviceWorker" in navigator)) throw new Error("Service worker støttes ikke");
+  if (!("PushManager" in window)) throw new Error("Push støttes ikke på denne enheten");
+
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("Varsler er ikke tillatt");
+
+  const reg = await navigator.serviceWorker.ready;
+
+  const existing = await reg.pushManager.getSubscription();
+  const vapid = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "").trim();
+  if (!vapid) throw new Error("Mangler NEXT_PUBLIC_VAPID_PUBLIC_KEY i miljøvariabler");
+
+  const sub =
+    existing ??
+    (await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapid),
+    }));
+
+  const res = await fetch("/api/push/subscribe", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(sub),
+  });
+
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j?.error || `Subscribe feilet (${res.status})`);
 }
+// ----------------------
 
 export default function HomesPage() {
   const router = useRouter();
@@ -158,43 +181,17 @@ export default function HomesPage() {
   const [ackBusy, setAckBusy] = useState<string | null>(null);
   const [ackError, setAckError] = useState<string | null>(null);
 
+  // Push UI
+  const [pushBusy, setPushBusy] = useState(false);
+
   // Origin for join-link
   const [origin, setOrigin] = useState<string>("");
 
   // Avoid double-load
   const didLoad = useRef(false);
 
-  // ✅ PWA install UI state
-  const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
-  const [standalone, setStandalone] = useState(false);
-  const [ios, setIos] = useState(false);
-
   useEffect(() => {
     setOrigin(window.location.origin);
-  }, []);
-
-  useEffect(() => {
-    setStandalone(isInStandaloneMode());
-    setIos(isIos());
-
-    const onBip = (e: Event) => {
-      // stop browser mini-infobar
-      e.preventDefault?.();
-      setInstallEvent(e as BeforeInstallPromptEvent);
-    };
-
-    const onInstalled = () => {
-      setInstallEvent(null);
-      setStandalone(true);
-    };
-
-    window.addEventListener("beforeinstallprompt", onBip as any);
-    window.addEventListener("appinstalled", onInstalled);
-
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onBip as any);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
   }, []);
 
   useEffect(() => {
@@ -279,6 +276,22 @@ export default function HomesPage() {
     router.replace("/login");
   }
 
+  async function onEnablePush() {
+    setPushBusy(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) return router.replace("/login");
+
+      await ensurePushSubscription(token);
+      alert("Varsler aktivert ✅");
+    } catch (e: any) {
+      alert(e?.message ?? "Klarte ikke aktivere varsler");
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
   function joinUrl(code: string) {
     const base = origin || "";
     return `${base}/join?code=${encodeURIComponent(code)}`;
@@ -352,12 +365,10 @@ export default function HomesPage() {
         return;
       }
 
-      // Optimistisk: marker latest_alert som acked i UI med en gang
       const nowIso = new Date().toISOString();
       setHomes((prev) =>
         prev.map((h) => {
           if (h.home_id !== homeId) return h;
-
           const latest = h.latest_alert;
           if (!latest) return h;
 
@@ -393,19 +404,6 @@ export default function HomesPage() {
     }
   }
 
-  async function onInstallClick() {
-    if (!installEvent) return;
-    try {
-      await installEvent.prompt();
-      await installEvent.userChoice;
-      // some browsers fire appinstalled, but we also update local state
-      setInstallEvent(null);
-      setStandalone(isInStandaloneMode());
-    } catch {
-      // ignore
-    }
-  }
-
   if (loading) {
     return (
       <main className="min-h-screen bg-gray-50 p-4">
@@ -426,13 +424,24 @@ export default function HomesPage() {
             <div className="text-xs text-gray-600">Status for hus du følger</div>
           </div>
 
-          <button
-            type="button"
-            onClick={onLogout}
-            className="shrink-0 rounded-xl bg-gray-900 px-3 py-2 text-sm text-white shadow-sm hover:bg-gray-800"
-          >
-            Logg ut
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={onEnablePush}
+              disabled={pushBusy}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50 disabled:opacity-60"
+            >
+              {pushBusy ? "Aktiverer…" : "Aktiver varsler"}
+            </button>
+
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-xl bg-gray-900 px-3 py-2 text-sm text-white shadow-sm hover:bg-gray-800"
+            >
+              Logg ut
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -496,12 +505,15 @@ export default function HomesPage() {
 
           const online = isSystemOnline(h.last_seen);
 
-          // ACK-status for “gjeldende rød-periode”
           const latestAlert = h.latest_alert ?? null;
           const canAck = Boolean(latestAlert?.alert_id);
           const isAcked = Boolean(latestAlert?.acknowledged);
 
-          const alertStartedAt = latestAlert?.triggered_at ?? h.latest_open_alert?.triggered_at ?? null;
+          const alertStartedAt =
+            latestAlert?.triggered_at ??
+            h.latest_open_alert?.triggered_at ??
+            null;
+
           const ackedAt = latestAlert?.acknowledged_at ?? h.last_checked?.acknowledged_at ?? null;
           const ackedBy = latestAlert?.ack_by ?? h.last_checked?.ack_by ?? null;
 
@@ -549,25 +561,12 @@ export default function HomesPage() {
                         )}
                       </div>
 
-                      {/* ✅ Behold kun ID under navn (ingen "sist sjekket" her) */}
                       <div className={`mt-1 text-xs ${meta.sub}`}>
                         ID: <span className="font-mono">{h.home_id}</span>
                       </div>
                     </div>
 
                     <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Placeholder – du har allerede “Endre navn” i UI hos deg, så vi lar den stå her uten logikk.
-                          // (Neste steg: vi kobler den til en API-route)
-                          alert("Neste steg: vi kobler Endre navn til backend 😊");
-                        }}
-                        className="rounded-xl border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-white"
-                      >
-                        Endre navn
-                      </button>
-
                       <Link
                         href={`/homes/${encodeURIComponent(h.home_id)}`}
                         className="rounded-xl border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-white"
@@ -625,7 +624,11 @@ export default function HomesPage() {
                             isAcked ? "bg-green-600 text-white" : "bg-gray-900 text-white hover:bg-gray-800",
                           ].join(" ")}
                         >
-                          {ackBusy === latestAlert?.alert_id ? "Logger…" : isAcked ? "Sjekket!" : "Jeg sjekker"}
+                          {ackBusy === latestAlert?.alert_id
+                            ? "Logger…"
+                            : isAcked
+                            ? "Sjekket!"
+                            : "Jeg sjekker"}
                         </button>
                       </div>
                     </div>
@@ -647,7 +650,9 @@ export default function HomesPage() {
                   {/* Invite box */}
                   {isAdmin && isInviteOpen && (
                     <div className="mt-4 rounded-2xl border border-gray-200 bg-white/80 p-4 ring-1 ring-black/5">
-                      <div className="text-sm text-gray-700">Send linken til pårørende. Koden blir forhåndsutfylt.</div>
+                      <div className="text-sm text-gray-700">
+                        Send linken til pårørende. Koden blir forhåndsutfylt.
+                      </div>
 
                       <div className="mt-3 grid gap-2">
                         <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
@@ -699,41 +704,6 @@ export default function HomesPage() {
             </div>
           );
         })}
-
-        {/* ✅ PWA: “Legg til på hjemskjermen” */}
-        {hasHomes && (
-          <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-            <div className="text-sm font-semibold text-gray-900">Legg til på hjemskjermen</div>
-
-            {standalone ? (
-              <div className="mt-1 text-sm text-gray-700">Appen er allerede installert ✅</div>
-            ) : installEvent ? (
-              <>
-                <div className="mt-1 text-sm text-gray-700">
-                  Legg Trygghet på hjemskjermen for rask tilgang og bedre push-støtte.
-                </div>
-
-                <button
-                  type="button"
-                  onClick={onInstallClick}
-                  className="mt-3 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-800"
-                >
-                  Legg til som app
-                </button>
-              </>
-            ) : ios ? (
-              <div className="mt-1 text-sm text-gray-700">
-                På iPhone/iPad: Trykk <span className="font-semibold">Del</span> →{" "}
-                <span className="font-semibold">Legg til på Hjem-skjerm</span>.
-              </div>
-            ) : (
-              <div className="mt-1 text-sm text-gray-700">
-                Hvis du ikke får opp install-knapp: åpne nettleser-menyen (⋯) og velg{" "}
-                <span className="font-semibold">Installer app</span> / <span className="font-semibold">Legg til</span>.
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Footer link */}
         {hasHomes && (
