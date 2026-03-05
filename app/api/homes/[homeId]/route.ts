@@ -35,10 +35,7 @@ function asString(v: any): string | null {
 }
 
 function asBool(v: any): boolean {
-  if (typeof v === "boolean") return v;
-  if (v === "true") return true;
-  if (v === "false") return false;
-  return Boolean(v);
+  return v === true || v === "true";
 }
 
 async function airtableList(tableName: string, query: string) {
@@ -51,21 +48,18 @@ async function airtableList(tableName: string, query: string) {
     cache: "no-store",
   });
 
+  const text = await res.text();
   if (!res.ok) {
-    const text = await res.text();
     throw new Error(`Airtable ${tableName} error (${res.status}): ${text}`);
   }
 
-  const json = await res.json();
+  let json: any = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = {};
+  }
   return json.records ?? [];
-}
-
-async function airtableFindOneByFormula(tableName: string, formula: string) {
-  const records = await airtableList(
-    tableName,
-    `filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`
-  );
-  return records?.[0] ?? null;
 }
 
 async function ensureMembership(accessToken: string, homeId: string) {
@@ -77,84 +71,107 @@ async function ensureMembership(accessToken: string, homeId: string) {
   if (error) throw new Error(error.message);
 
   const wanted = norm(homeId);
-  return (data ?? []).find((m: any) => norm(m.home_id) === wanted) ?? null;
+  const match = (data ?? []).find((m: any) => norm(m.home_id) === wanted);
+  return match ?? null;
 }
 
-function getAckInfo(fields: Record<string, any>) {
-  const ackBool =
-    asBool(pickFirst(fields, ["acknowledged", "acked", "is_acknowledged"])) || false;
+function matchesHome(homeIdField: any, homeKey: string, homeRecordId: string) {
+  if (Array.isArray(homeIdField)) return homeRecordId ? homeIdField.includes(homeRecordId) : false;
+  if (typeof homeIdField === "string") return norm(homeIdField) === norm(homeKey);
+  return false;
+}
 
-  const ackAt = asString(
-    pickFirst(fields, ["acknowledged_at", "ack_at", "ack_time", "acked_at"])
+function getAckBy(fields: Record<string, any>): string | null {
+  return asString(
+    pickFirst(fields, [
+      "ack_by",
+      "acknowledged_by",
+      "ack_by_email",
+      "ack_email",
+      "acked_by",
+      "acked_by_email",
+    ])
   );
-
-  const ackBy = asString(
-    pickFirst(fields, ["ack_by", "acknowledged_by", "ack_by_email", "ack_email"])
-  );
-
-  const acknowledged = Boolean(ackBool) || Boolean(ackAt);
-  return { acknowledged, acknowledged_at: ackAt, ack_by: ackBy };
 }
 
-function translateAlertRow(a: any) {
-  const f = a.fields ?? {};
-  const ack = getAckInfo(f);
-
-  return {
-    alert_id: a.id,
-    home_id: asString(pickFirst(f, ["home_id", "home_key", "home_text"])) ?? "",
-    type: asString(f.type),
-    window: asString(f.window),
-    triggered_at: asString(f.triggered_at),
-    acknowledged: ack.acknowledged,
-    acknowledged_at: ack.acknowledged_at,
-    ack_by: ack.ack_by,
-  };
+function getAckAt(fields: Record<string, any>): string | null {
+  return asString(pickFirst(fields, ["acknowledged_at", "ack_at", "ack_time", "acked_at"]));
 }
 
-// ✅ Next 15-safe signature (params as Promise)
+// ✅ Next 15 (Vercel) krever params-type som Promise her
 export async function GET(req: Request, ctx: { params: Promise<{ homeId: string }> }) {
   try {
     const accessToken = requireBearer(req);
-    const { homeId } = await ctx.params;
 
-    const decodedHomeId = decodeURIComponent(String(homeId || "")).trim();
-    if (!decodedHomeId) {
+    const { homeId: rawHomeId } = await ctx.params;
+    const homeId = decodeURIComponent(String(rawHomeId ?? "")).trim();
+
+    if (!homeId) {
       return NextResponse.json({ error: "Missing homeId" }, { status: 400 });
     }
 
-    // 1) Membership check
-    const membership = await ensureMembership(accessToken, decodedHomeId);
+    // 1) Membership
+    const membership = await ensureMembership(accessToken, homeId);
     if (!membership) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // 2) Load home from Airtable (by home_id)
-    const homeRec = await airtableFindOneByFormula(
+    // 2) Home record
+    const homeFormula = `{home_id}="${homeId.replace(/"/g, '\\"')}"`;
+    const homeRecords = await airtableList(
       AIRTABLE_HOMES_TABLE,
-      `{home_id}="${decodedHomeId.replace(/"/g, '\\"')}"`
+      `filterByFormula=${encodeURIComponent(homeFormula)}&maxRecords=1`
     );
 
-    const hf = homeRec?.fields ?? {};
+    const homeRec = homeRecords?.[0] ?? null;
+    const homeFields = homeRec?.fields ?? {};
+    const homeRecordId: string = homeRec?.id ?? "";
+
     const home_name =
-      (pickFirst(hf, ["name", "home_name", "display_name", "title"]) as string | null) ?? null;
+      (pickFirst(homeFields ?? {}, ["home_name", "name", "display_name", "title"]) as
+        | string
+        | null) ?? null;
 
     const home = {
-      home_id: decodedHomeId,
+      home_id: homeId,
       home_name,
-      role: membership?.role ?? "viewer",
+      role: membership.role ?? "viewer",
+      state: asString(homeFields.state),
+      last_seen: asString(homeFields.last_seen),
+      last_motion: asString(homeFields.last_motion),
+      battery_low: asBool(homeFields.battery_low),
+      last_alert_window: asString(homeFields.last_alert_window),
+      last_alert_time: asString(homeFields.last_alert_time),
     };
 
-    // 3) Alerts (latest first) – filter to this home_id
-    // NB: Hvis Alerts.home_id er linked record hos deg, må vi justere filtering.
+    // 3) Alerts list (nyeste først)
     const alertsRaw = await airtableList(
       AIRTABLE_ALERTS_TABLE,
-      `filterByFormula=${encodeURIComponent(
-        `{home_id}="${decodedHomeId.replace(/"/g, '\\"')}"`
-      )}&sort[0][field]=triggered_at&sort[0][direction]=desc&maxRecords=200`
+      `sort[0][field]=triggered_at&sort[0][direction]=desc&maxRecords=200`
     );
 
-    const alerts = (alertsRaw ?? []).map(translateAlertRow);
+    const relevant = (alertsRaw ?? []).filter((a: any) =>
+      matchesHome(a.fields?.home_id, homeId, homeRecordId)
+    );
+
+    const alerts = relevant.map((a: any) => {
+      const f = a.fields ?? {};
+      const acknowledged = asBool(pickFirst(f, ["acknowledged", "acked", "is_acknowledged"]));
+      const acknowledged_at = getAckAt(f);
+      const ack_by = getAckBy(f);
+
+      return {
+        alert_id: a.id,
+        home_id: homeId,
+        type: asString(f.type),
+        window: asString(f.window),
+        triggered_at: asString(f.triggered_at),
+        acknowledged: acknowledged || Boolean(acknowledged_at),
+        acknowledged_at,
+        ack_by,
+        resolved_at: asString(pickFirst(f, ["resolved_at", "closed_at", "ended_at"])),
+      };
+    });
 
     return NextResponse.json({ home, alerts });
   } catch (e: any) {
