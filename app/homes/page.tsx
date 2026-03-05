@@ -23,7 +23,6 @@ type HomeRow = {
     triggered_at: string | null;
   };
 
-  // siste alert (nyeste), uansett ack/open
   latest_alert?: null | {
     alert_id: string;
     type: string | null;
@@ -113,13 +112,28 @@ function isSystemOnline(lastSeenIso: string | null) {
   if (!lastSeenIso) return false;
   const d = new Date(lastSeenIso);
   if (Number.isNaN(d.getTime())) return false;
-
-  // Heartbeat innen 90 min => online
   const minutes = (Date.now() - d.getTime()) / 60000;
   return minutes <= 90;
 }
 
-// ---- PUSH helpers ----
+// ---------------- PUSH helpers (med timeout + fallback register) ----------------
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} (timeout ${ms}ms)`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -129,39 +143,83 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
-async function ensurePushSubscription(accessToken: string) {
+async function getServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
   if (!("serviceWorker" in navigator)) throw new Error("Service worker støttes ikke");
+
+  // 1) Prøv ready raskt
+  try {
+    return await withTimeout(navigator.serviceWorker.ready, 4000, "Service worker ikke klar");
+  } catch {
+    // 2) Fallback: registrer selv (next-pwa bruker /sw.js)
+    try {
+      await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    } catch (e: any) {
+      throw new Error(e?.message || "Kunne ikke registrere service worker");
+    }
+
+    // 3) Prøv ready igjen
+    return await withTimeout(navigator.serviceWorker.ready, 8000, "Service worker ble ikke klar etter register");
+  }
+}
+
+async function ensurePushSubscription(accessToken: string) {
   if (!("PushManager" in window)) throw new Error("Push støttes ikke på denne enheten");
+  if (!("Notification" in window)) throw new Error("Varsler støttes ikke på denne enheten");
 
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") throw new Error("Varsler er ikke tillatt");
+  if (Notification.permission === "denied") {
+    throw new Error("Varsler er blokkert. Tillat varsler i nettleser/app-innstillinger.");
+  }
 
-  const reg = await navigator.serviceWorker.ready;
+  const perm =
+    Notification.permission === "granted"
+      ? "granted"
+      : await withTimeout(Notification.requestPermission(), 8000, "Varsel-tillatelse");
 
-  const existing = await reg.pushManager.getSubscription();
+  if (perm !== "granted") throw new Error("Varsler ble ikke tillatt");
+
+  const reg = await getServiceWorkerRegistration();
+
   const vapid = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "").trim();
   if (!vapid) throw new Error("Mangler NEXT_PUBLIC_VAPID_PUBLIC_KEY i miljøvariabler");
 
+  const existing = await withTimeout(reg.pushManager.getSubscription(), 5000, "Henter eksisterende subscription");
+
   const sub =
     existing ??
-    (await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapid),
-    }));
+    (await withTimeout(
+      reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapid),
+      }),
+      12000,
+      "Oppretter push subscription"
+    ));
 
-  const res = await fetch("/api/push/subscribe", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(sub),
-  });
+  const res = await withTimeout(
+    fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(sub),
+    }),
+    12000,
+    "Lagrer subscription på server"
+  );
 
-  const j = await res.json().catch(() => ({}));
+  const text = await res.text();
+  let j: any = {};
+  try {
+    j = text ? JSON.parse(text) : {};
+  } catch {
+    j = {};
+  }
+
   if (!res.ok) throw new Error(j?.error || `Subscribe feilet (${res.status})`);
 }
-// ----------------------
+
+// -------------------------------------------------------------------------------
 
 export default function HomesPage() {
   const router = useRouter();
@@ -183,6 +241,7 @@ export default function HomesPage() {
 
   // Push UI
   const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
 
   // Origin for join-link
   const [origin, setOrigin] = useState<string>("");
@@ -277,6 +336,7 @@ export default function HomesPage() {
   }
 
   async function onEnablePush() {
+    setPushError(null);
     setPushBusy(true);
     try {
       const { data } = await supabase.auth.getSession();
@@ -286,7 +346,9 @@ export default function HomesPage() {
       await ensurePushSubscription(token);
       alert("Varsler aktivert ✅");
     } catch (e: any) {
-      alert(e?.message ?? "Klarte ikke aktivere varsler");
+      const msg = e?.message ?? "Klarte ikke aktivere varsler";
+      setPushError(msg);
+      alert(msg);
     } finally {
       setPushBusy(false);
     }
@@ -459,6 +521,14 @@ export default function HomesPage() {
             </div>
           </div>
         )}
+
+        {pushError && (
+          <div className="mx-auto max-w-2xl px-4 pb-3">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              {pushError}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mx-auto max-w-2xl p-4">
@@ -500,9 +570,7 @@ export default function HomesPage() {
           const link = code ? joinUrl(code) : "";
 
           const motionAgo = timeAgo(h.last_motion);
-
           const title = (h.home_name || "").trim() || h.home_id;
-
           const online = isSystemOnline(h.last_seen);
 
           const latestAlert = h.latest_alert ?? null;
