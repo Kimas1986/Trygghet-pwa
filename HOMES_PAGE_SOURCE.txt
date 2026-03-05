@@ -1,0 +1,331 @@
+cd /d "%USERPROFILE%\trygghet-pwa" && powershell -NoProfile -Command "$code = @'
+\"use client\";
+
+import { useEffect, useMemo, useState } from \"react\";
+import Link from \"next/link\";
+import { useRouter } from \"next/navigation\";
+import { supabase } from \"@/lib/supabaseClient\";
+import type { Session } from \"@supabase/supabase-js\";
+
+type HomeRow = {
+  home_id: string;
+  role: string;
+  state: string | null;
+  last_seen: string | null;
+  last_motion: string | null;
+  battery_low: boolean | null;
+  last_alert_window: string | null;
+  last_alert_time: string | null;
+
+  latest_open_alert: null | {
+    alert_id: string;
+    type: string | null;
+    window: string | null;
+    triggered_at: string | null;
+  };
+
+  last_checked: null | {
+    acknowledged_at: string | null;
+    ack_by: string | null;
+  };
+};
+
+function formatDate(iso: string | null) {
+  if (!iso) return \"â€”\";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
+export default function HomesPage() {
+  const router = useRouter();
+
+  const [session, setSession] = useState<Session | null>(null);
+  const [homes, setHomes] = useState<HomeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [busyCheckHome, setBusyCheckHome] = useState<string | null>(null);
+  const [busyInviteHome, setBusyInviteHome] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const s = sessionData.session;
+      if (!s) {
+        router.replace(\"/\");
+        return;
+      }
+      setSession(s);
+
+      const res = await fetch(\"/api/homes\", {
+        headers: { Authorization: `Bearer ${s.access_token}` },
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        alert(\"API error: \" + (json?.error ?? \"unknown\"));
+        setLoading(false);
+        return;
+      }
+
+      setHomes(json.homes ?? []);
+      setLoading(false);
+    };
+
+    setLoading(true);
+    load();
+  }, [router]);
+
+  const redHomes = useMemo(
+    () => homes.filter((h) => h.state === \"red\"),
+    [homes]
+  );
+
+  const ackCheck = async (home: HomeRow) => {
+    if (!session) return;
+    if (!home.latest_open_alert?.alert_id) return;
+
+    setBusyCheckHome(home.home_id);
+
+    const alertId = home.latest_open_alert.alert_id;
+
+    const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/ack`, {
+      method: \"POST\",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      alert(\"ACK error: \" + (json?.error ?? \"unknown\"));
+      setBusyCheckHome(null);
+      return;
+    }
+
+    // UI-oppdatering lokalt: marker som sjekket
+    setHomes((prev) =>
+      prev.map((h) => {
+        if (h.home_id !== home.home_id) return h;
+        return {
+          ...h,
+          latest_open_alert: null,
+          last_checked: {
+            acknowledged_at: new Date().toISOString(),
+            ack_by: session.user.email ?? \"unknown\",
+          },
+        };
+      })
+    );
+
+    setBusyCheckHome(null);
+  };
+
+  const createInvite = async (homeId: string) => {
+    if (!session) return;
+    if (!homeId) return;
+
+    setBusyInviteHome(homeId);
+
+    const res = await fetch(
+      `/api/homes/${encodeURIComponent(homeId)}/create-invite`,
+      {
+        method: \"POST\",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      }
+    );
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      alert(\"Kunne ikke lage kode: \" + (json?.error ?? \"unknown\"));
+      setBusyInviteHome(null);
+      return;
+    }
+
+    const code = String(json?.code ?? \"\");
+    if (!code) {
+      alert(\"Kunne ikke lage kode (mangler code i respons).\");
+      setBusyInviteHome(null);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(code);
+      alert(`Delingskode kopiert:\\n\\n${code}\\n\\nSend den til pÃ¥rÃ¸rende.`);
+    } catch {
+      alert(`Delingskode:\\n\\n${code}\\n\\nSend den til pÃ¥rÃ¸rende.`);
+    }
+
+    setBusyInviteHome(null);
+  };
+
+  if (loading) return <div className=\"p-4 sm:p-6\">Laster...</div>;
+
+  return (
+    <div className=\"min-h-screen bg-gray-50\">
+      <div className=\"mx-auto max-w-3xl p-4 sm:p-6\">
+        <div className=\"flex items-start justify-between gap-4\">
+          <div className=\"min-w-0\">
+            <h1 className=\"text-2xl sm:text-3xl font-bold\">Hjem</h1>
+            <p className=\"text-sm text-gray-600 break-all\">
+              Innlogget som: {session?.user.email}
+            </p>
+          </div>
+
+          <button
+            className=\"shrink-0 rounded-lg border bg-white px-3 py-2 text-sm font-semibold\"
+            onClick={async () => {
+              await supabase.auth.signOut();
+              router.replace(\"/\");
+            }}
+          >
+            Logg ut
+          </button>
+        </div>
+
+        {redHomes.length > 0 && (
+          <div className=\"mt-5 rounded-xl border border-red-200 bg-red-50 p-4\">
+            <div className=\"text-lg font-bold text-red-900\">ðŸ”´ Alarm</div>
+            <div className=\"mt-2 text-sm text-red-800\">
+              Trykk <span className=\"font-semibold\">â€œJeg sjekkerâ€</span> for Ã¥
+              bekrefte at du fÃ¸lger opp.
+            </div>
+            <div className=\"mt-2 text-sm text-red-800\">
+              Hvis ingen kvitterer innen{\" \"}
+              <span className=\"font-semibold\">30 minutter</span>, sendes SMS
+              automatisk.
+            </div>
+          </div>
+        )}
+
+        <div className=\"mt-5 grid gap-4\">
+          {homes.map((h) => {
+            let emoji = \"âšª\";
+            let card = \"bg-white border-gray-200\";
+            let title = \"Ukjent status\";
+
+            if (h.state === \"green\") {
+              emoji = \"ðŸŸ¢\";
+              card = \"bg-green-50 border-green-200\";
+              title = \"Alt normalt\";
+            } else if (h.state === \"red\") {
+              emoji = \"ðŸ”´\";
+              card = \"bg-red-50 border-red-200\";
+              title = \"Alarm â€“ ingen bevegelse\";
+            } else if (h.state === \"grey\") {
+              emoji = \"âš«\";
+              card = \"bg-gray-100 border-gray-300\";
+              title = \"Ingen kontakt med sensor\";
+            }
+
+            const canCheck = h.state === \"red\" && !!h.latest_open_alert?.alert_id;
+
+            const checkedInfo =
+              h.last_checked?.ack_by || h.last_checked?.acknowledged_at
+                ? `Sist sjekket: ${h.last_checked?.ack_by ?? \"â€”\"} (${formatDate(
+                    h.last_checked?.acknowledged_at ?? null
+                  )})`
+                : null;
+
+            return (
+              <div
+                key={h.home_id}
+                className={`rounded-2xl border p-4 sm:p-5 shadow-sm ${card}`}
+              >
+                <div className=\"flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between\">
+                  <div className=\"min-w-0\">
+                    <div className=\"flex items-center gap-2\">
+                      <div className=\"text-xl sm:text-2xl font-bold\">
+                        {emoji} {h.home_id}
+                      </div>
+                      <span className=\"text-xs rounded-full bg-white/70 border px-2 py-0.5 text-gray-700\">
+                        {h.role}
+                      </span>
+                    </div>
+
+                    <div className=\"mt-1 text-sm sm:text-base text-gray-800 font-semibold\">
+                      {title}
+                    </div>
+
+                    <div className=\"mt-3 space-y-1 text-sm text-gray-800\">
+                      <div>
+                        <span className=\"font-semibold\">Sist kontakt:</span>{\" \"}
+                        {formatDate(h.last_seen)}
+                      </div>
+                      <div>
+                        <span className=\"font-semibold\">Sist bevegelse:</span>{\" \"}
+                        {formatDate(h.last_motion)}
+                      </div>
+                      {checkedInfo && (
+                        <div>
+                          <span className=\"font-semibold\">Status:</span>{\" \"}
+                          {checkedInfo}
+                        </div>
+                      )}
+                      {h.battery_low && (
+                        <div className=\"font-semibold text-yellow-800\">
+                          âš  Lavt batteri
+                        </div>
+                      )}
+                    </div>
+
+                    {h.state === \"red\" && h.latest_open_alert && (
+                      <div className=\"mt-3 text-sm text-red-900\">
+                        <span className=\"font-semibold\">Alarm tid:</span>{\" \"}
+                        {formatDate(h.latest_open_alert.triggered_at)}
+                        {h.latest_open_alert.window
+                          ? ` (vindu ${h.latest_open_alert.window})`
+                          : \"\"}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className=\"flex flex-col gap-2 sm:items-end\">
+                    {h.state === \"red\" && (
+                      <button
+                        onClick={() => ackCheck(h)}
+                        disabled={!canCheck || busyCheckHome === h.home_id}
+                        className={`w-full sm:w-auto rounded-xl px-5 py-4 text-white font-bold text-base
+                          ${
+                            canCheck
+                              ? \"bg-red-700 active:bg-red-800\"
+                              : \"bg-green-700\"
+                          }
+                          disabled:opacity-70`}
+                      >
+                        {busyCheckHome === h.home_id
+                          ? \"Sender...\"
+                          : canCheck
+                          ? \"Jeg sjekker\"
+                          : \"Sjekket!\"}
+                      </button>
+                    )}
+
+                    <Link
+                      href={`/homes/${encodeURIComponent(h.home_id)}`}
+                      className=\"w-full sm:w-auto text-center rounded-xl border bg-white px-4 py-3 text-sm font-semibold\"
+                    >
+                      Se historikk
+                    </Link>
+
+                    <button
+                      onClick={() => createInvite(h.home_id)}
+                      disabled={busyInviteHome === h.home_id}
+                      className=\"w-full sm:w-auto text-center rounded-xl border bg-white px-4 py-3 text-sm font-semibold disabled:opacity-60\"
+                    >
+                      {busyInviteHome === h.home_id ? \"Lager kode...\" : \"Del kode\"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className=\"mt-6 text-xs text-gray-500\">
+          Tips: Legg denne siden pÃ¥ hjemskjermen (PWA) for rask tilgang.
+        </div>
+      </div>
+    </div>
+  );
+}
+'@; New-Item -Force -ItemType Directory -Path 'app\homes' | Out-Null; [System.IO.File]::WriteAllText('app\homes\page.tsx', $code, (New-Object System.Text.UTF8Encoding($false))); Write-Host 'OK: app\homes\page.tsx oppdatert' -ForegroundColor Green"
