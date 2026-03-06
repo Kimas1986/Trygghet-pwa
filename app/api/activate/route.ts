@@ -54,8 +54,8 @@ export async function POST(req: Request) {
 
     const { data: pkg, error: pkgErr } = await admin
       .from("product_packages")
-      .select("id, code, claimed_at, home_id")
-      .eq("code", code)
+      .select("id, product_code, claimed_at, home_id")
+      .eq("product_code", code)
       .maybeSingle();
 
     if (pkgErr) throw new Error(pkgErr.message);
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
 
     if (updateErr) throw new Error(updateErr.message);
 
-    return NextResponse.json({ ok: true, code, home_id });
+    return NextResponse.json({ ok: true, product_code: code, home_id });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: msg }, { status: 500 });
