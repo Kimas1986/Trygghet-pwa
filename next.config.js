@@ -3,16 +3,15 @@ const withPWA = require("next-pwa")({
   register: true,
   skipWaiting: true,
   disable: process.env.NODE_ENV === "development",
+
+  // ✅ Viktig fix for Next App Router / Vercel
+  buildExcludes: [
+    /app-build-manifest\.json$/,
+  ],
 });
 
-/** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-
-  // ✅ Viktig: Ikke stopp production build pga "any"/lint
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
 };
 
 module.exports = withPWA(nextConfig);
