@@ -107,7 +107,7 @@ export async function POST(req: Request) {
       return json(500, { error: "Kunne ikke opprette bruker" });
     }
 
-    // 3) Lag home_id og claim produktkoden FØRST
+    // 3) Lag home_id og claim produktkoden FØRST (race-safe)
     const home_id = newHomeId();
 
     const { data: claimedRows, error: claimErr } = await admin
@@ -119,7 +119,7 @@ export async function POST(req: Request) {
       })
       .eq("id", pkg.id)
       .is("home_id", null)
-      .select("id, product_code, home_id");
+      .select();
 
     if (claimErr) {
       return json(500, { error: `product_packages claim: ${claimErr.message}` });
