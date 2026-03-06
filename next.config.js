@@ -3,8 +3,6 @@ const withPWA = require("next-pwa")({
   register: true,
   skipWaiting: true,
   disable: process.env.NODE_ENV === "development",
-
-  // ✅ Viktig fix for Next App Router / Vercel
   buildExcludes: [
     /app-build-manifest\.json$/,
   ],
