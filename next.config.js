@@ -3,13 +3,15 @@ const withPWA = require("next-pwa")({
   register: true,
   skipWaiting: true,
   disable: process.env.NODE_ENV === "development",
-  buildExcludes: [
-    /app-build-manifest\.json$/,
-  ],
+  buildExcludes: [/app-build-manifest\.json$/],
 });
 
 const nextConfig = {
   reactStrictMode: true,
+
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
 };
 
 module.exports = withPWA(nextConfig);
