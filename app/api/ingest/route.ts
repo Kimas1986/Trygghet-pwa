@@ -2,78 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const INGEST_SECRET = process.env.INGEST_SECRET || "";
-
-const AIRTABLE_BASE = process.env.AIRTABLE_BASE_ID!;
-const AIRTABLE_KEY = process.env.AIRTABLE_API_KEY!;
-const HOMES = process.env.AIRTABLE_HOMES_TABLE || "Homes";
-
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-async function airtableFetch(url: string, init?: RequestInit) {
-  return fetch(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_KEY}`,
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
-    cache: "no-store",
-  });
-}
-
-async function airtableFindByFormula(table: string, formula: string, maxRecords = 1) {
-  const url =
-    `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(table)}` +
-    `?filterByFormula=${encodeURIComponent(formula)}&maxRecords=${maxRecords}`;
-
-  const res = await airtableFetch(url, { method: "GET" });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Airtable find failed (${table}): ${t}`);
-  }
-
-  const j = await res.json();
-  return (j.records ?? []) as Array<{ id: string; fields: Record<string, unknown> }>;
-}
-
-async function upsertHomeByHomeId(home_id: string, fields: Record<string, unknown>) {
-  const recs = await airtableFindByFormula(
-    HOMES,
-    `{home_id}="${home_id.replace(/"/g, '\\"')}"`,
-    1
-  );
-
-  if (recs.length) {
-    const recordId = recs[0].id;
-    const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(HOMES)}/${recordId}`;
-    const res = await airtableFetch(url, {
-      method: "PATCH",
-      body: JSON.stringify({ fields }),
-    });
-
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`Airtable Homes PATCH failed: ${t}`);
-    }
-
-    return { created: false, recordId };
-  }
-
-  const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(HOMES)}`;
-  const res = await airtableFetch(url, {
-    method: "POST",
-    body: JSON.stringify({ records: [{ fields: { home_id, ...fields } }] }),
-  });
-
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Airtable Homes CREATE failed: ${t}`);
-  }
-
-  const j = await res.json();
-  return { created: true, recordId: j.records?.[0]?.id ?? null };
-}
 
 function parseIsoOrNull(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -86,16 +16,32 @@ function parseIsoOrNull(v: unknown): string | null {
   return d.toISOString();
 }
 
-async function resolveHomeIdFromProductCode(product_code: string): Promise<string | null> {
-  if (!product_code) return null;
+function parseBooleanOrUndefined(v: unknown): boolean | undefined {
+  if (typeof v === "boolean") return v;
 
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true") return true;
+    if (s === "false") return false;
+  }
+
+  return undefined;
+}
+
+function getAdminClient() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("Supabase env mangler");
   }
 
-  const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
+}
+
+async function resolveHomeIdFromProductCode(product_code: string): Promise<string | null> {
+  if (!product_code) return null;
+
+  const admin = getAdminClient();
 
   const { data: pkg, error } = await admin
     .from("product_packages")
@@ -103,12 +49,16 @@ async function resolveHomeIdFromProductCode(product_code: string): Promise<strin
     .eq("product_code", product_code)
     .maybeSingle();
 
-  if (error) throw new Error(error.message);
-  if (!pkg) return null;
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!pkg) {
+    return null;
+  }
 
   const homeId = typeof pkg.home_id === "string" ? pkg.home_id.trim() : "";
   if (!homeId) {
-    // Produktkoden finnes, men er ikke aktivert/claimet ennå
     return null;
   }
 
@@ -134,6 +84,9 @@ export async function POST(req: Request) {
     const door_open = body.door_open === true;
     const heartbeat = body.heartbeat === true;
 
+    const batteryLow = parseBooleanOrUndefined(body.battery_low);
+    const systemOk = parseBooleanOrUndefined(body.system_ok);
+
     if (!home_id_input && !product_code) {
       return NextResponse.json({ error: "Missing home_id or product_code" }, { status: 400 });
     }
@@ -157,6 +110,26 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Kunne ikke finne home_id" }, { status: 400 });
     }
 
+    const admin = getAdminClient();
+
+    // Hjemmet må allerede finnes i homes.
+    const { data: existingHome, error: existingErr } = await admin
+      .from("homes")
+      .select("id, home_id, state")
+      .eq("home_id", home_id)
+      .maybeSingle();
+
+    if (existingErr) {
+      return NextResponse.json({ error: `homes lookup: ${existingErr.message}` }, { status: 500 });
+    }
+
+    if (!existingHome) {
+      return NextResponse.json(
+        { error: `Fant ikke home i Supabase homes for ${home_id}` },
+        { status: 404 }
+      );
+    }
+
     const motionIso =
       parseIsoOrNull(body.last_motion_at) ??
       parseIsoOrNull(body.last_motion) ??
@@ -169,9 +142,17 @@ export async function POST(req: Request) {
 
     const nowIso = new Date().toISOString();
 
-    const fields: Record<string, unknown> = {};
+    const fields: Record<string, unknown> = {
+      last_seen: seenIso ?? nowIso,
+    };
 
-    fields.last_seen = seenIso ?? nowIso;
+    if (batteryLow !== undefined) {
+      fields.battery_low = batteryLow;
+    }
+
+    if (systemOk !== undefined) {
+      fields.system_ok = systemOk;
+    }
 
     if (door_open) {
       fields.mode = "away";
@@ -186,29 +167,28 @@ export async function POST(req: Request) {
       fields.state = "green";
     }
 
+    // Ved ren heartbeat oppdaterer vi bare last_seen (+ evt battery/system),
+    // og lar state være urørt.
     if (heartbeat && !motionBool && !motionIso && !door_open) {
-      const existing = await airtableFindByFormula(
-        HOMES,
-        `{home_id}="${home_id.replace(/"/g, '\\"')}"`,
-        1
-      );
-
-      const curState = String(existing?.[0]?.fields?.state ?? "")
-        .trim()
-        .toLowerCase();
-
-      if (!curState) {
-        fields.state = "green";
-      }
+      // bevisst ingen ekstra state-endring her
     }
 
-    const result = await upsertHomeByHomeId(home_id, fields);
+    const { data: updatedHome, error: updateErr } = await admin
+      .from("homes")
+      .update(fields)
+      .eq("home_id", home_id)
+      .select()
+      .maybeSingle();
+
+    if (updateErr) {
+      return NextResponse.json({ error: `homes update: ${updateErr.message}` }, { status: 500 });
+    }
 
     return NextResponse.json({
       ok: true,
       home_id,
       wrote: fields,
-      upsert: result,
+      updated: updatedHome,
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unknown error";

@@ -38,6 +38,9 @@ type RegisterBody = {
 };
 
 export async function POST(req: Request) {
+  let createdUserId: string | null = null;
+  let claimedPkgId: string | null = null;
+
   try {
     const body = (await req.json().catch(() => ({}))) as RegisterBody;
 
@@ -107,8 +110,11 @@ export async function POST(req: Request) {
       return json(500, { error: "Kunne ikke opprette bruker" });
     }
 
+    createdUserId = userId;
+
     // 3) Lag home_id og claim produktkoden FØRST (race-safe)
     const home_id = newHomeId();
+    claimedPkgId = pkg.id;
 
     const { data: claimedRows, error: claimErr } = await admin
       .from("product_packages")
@@ -129,7 +135,26 @@ export async function POST(req: Request) {
       return json(409, { error: "Produktkode ble claimet av en annen prosess. Prøv igjen." });
     }
 
-    // 4) Nå er produktkoden låst. Opprett membership.
+    // 4) Opprett home i Supabase homes
+    const { error: hErr } = await admin.from("homes").insert({
+      home_id,
+      home_name: home_id,
+      state: "green",
+      last_seen: null,
+      battery_low: false,
+      last_motion: null,
+      last_alert_window: null,
+      last_alert_time: null,
+      system_ok: true,
+      mode: "home",
+      mode_updated_at: new Date().toISOString(),
+    });
+
+    if (hErr) {
+      return json(500, { error: `homes: ${hErr.message}` });
+    }
+
+    // 5) Opprett membership
     const { error: mErr } = await admin.from("memberships").insert({
       user_id: userId,
       home_id,
@@ -140,7 +165,7 @@ export async function POST(req: Request) {
       return json(500, { error: `memberships: ${mErr.message}` });
     }
 
-    // 5) Opprett contact_methods
+    // 6) Opprett contact_methods
     const { error: cErr } = await admin.from("contact_methods").insert({
       user_id: userId,
       home_id,

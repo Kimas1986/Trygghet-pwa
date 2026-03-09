@@ -4,10 +4,6 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY!;
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID!;
-const AIRTABLE_HOMES_TABLE = process.env.AIRTABLE_HOMES_TABLE || "Homes";
-
 function requireBearer(req: Request) {
   const authHeader = req.headers.get("authorization") || "";
   const match = authHeader.match(/^Bearer (.+)$/);
@@ -16,9 +12,18 @@ function requireBearer(req: Request) {
   return token;
 }
 
-function norm(s: string) {
-  return (s || "").trim().toUpperCase();
+function norm(s: unknown) {
+  return String(s ?? "").trim();
 }
+
+function normKey(s: unknown) {
+  return String(s ?? "").trim().toUpperCase();
+}
+
+type MembershipRow = {
+  home_id: string | null;
+  role: string | null;
+};
 
 async function ensureMembership(accessToken: string, homeId: string) {
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON, {
@@ -26,110 +31,69 @@ async function ensureMembership(accessToken: string, homeId: string) {
   });
 
   const { data, error } = await supabase.from("memberships").select("home_id, role");
-  if (error) throw new Error(error.message);
 
-  const wanted = norm(homeId);
-  const match = (data ?? []).find((m: any) => norm(m.home_id) === wanted);
-  return match ?? null;
-}
-
-async function airtableList(tableName: string, query: string) {
-  const url =
-    `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}` +
-    (query ? `?${query}` : "");
-
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Airtable ${tableName} error (${res.status}): ${text}`);
+  if (error) {
+    throw new Error(error.message);
   }
 
-  const json = await res.json();
-  return json.records ?? [];
-}
-
-async function airtablePatch(tableName: string, recordId: string, fields: Record<string, any>) {
-  const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(
-    tableName
-  )}/${encodeURIComponent(recordId)}`;
-
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    cache: "no-store",
-    body: JSON.stringify({ fields }),
-  });
-
-  const text = await res.text();
-  return { ok: res.ok, status: res.status, text };
-}
-
-function isUnknownField422(status: number, text: string) {
-  return status === 422 && text.includes("UNKNOWN_FIELD_NAME");
+  const wanted = normKey(homeId);
+  const rows = (data ?? []) as MembershipRow[];
+  const match = rows.find((m) => normKey(m.home_id) === wanted);
+  return match ?? null;
 }
 
 export async function POST(req: Request) {
   try {
     const accessToken = requireBearer(req);
 
-    const body = await req.json().catch(() => ({}));
-    const home_id = String(body?.home_id ?? "").trim();
-    const name = String(body?.name ?? "").trim();
+    const body = await req.json().catch(() => ({} as Record<string, unknown>));
+    const home_id = norm(body.home_id);
+    const name = norm(body.name);
 
     if (!home_id || !name) {
       return NextResponse.json({ error: "Missing home_id or name" }, { status: 400 });
     }
 
-    // 1) Membership (alle medlemmer får lov til å endre navnet)
+    if (name.length < 2) {
+      return NextResponse.json({ error: "Ugyldig navn (minst 2 tegn)." }, { status: 400 });
+    }
+
+    if (name.length > 60) {
+      return NextResponse.json({ error: "Navnet er for langt (maks 60 tegn)." }, { status: 400 });
+    }
+
+    // Samme tilgangsnivå som før: alle medlemmer av hjemmet får lov
     const membership = await ensureMembership(accessToken, home_id);
     if (!membership) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // 2) Finn Home-record i Airtable via home_id
-    const formula = `{home_id}="${home_id.replace(/"/g, '\\"')}"`;
-    const records = await airtableList(
-      AIRTABLE_HOMES_TABLE,
-      `filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`
-    );
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON, {
+      global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    });
 
-    const rec = records?.[0];
-    if (!rec?.id) {
-      return NextResponse.json({ error: "Home not found in Airtable" }, { status: 404 });
-    }
+    const { data: updated, error: updateError } = await supabase
+      .from("homes")
+      .update({ home_name: name })
+      .eq("home_id", home_id)
+      .select("home_id, home_name")
+      .maybeSingle();
 
-    // 3) Patch: prøv flere feltnavn uten å kræsje hvis feltet ikke finnes
-    const candidates = ["home_name", "name", "display_name", "title"];
-    let updated = false;
-
-    for (const fieldName of candidates) {
-      const r = await airtablePatch(AIRTABLE_HOMES_TABLE, rec.id, { [fieldName]: name });
-      if (r.ok) {
-        updated = true;
-        break;
-      }
-      if (!isUnknownField422(r.status, r.text)) {
-        throw new Error(`Airtable rename error (${r.status}): ${r.text}`);
-      }
+    if (updateError) {
+      throw new Error(updateError.message);
     }
 
     if (!updated) {
-      return NextResponse.json(
-        { error: "Fant ingen navnefelt i Airtable (home_name/name/display_name/title)." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Home not found in Supabase" }, { status: 404 });
     }
 
-    return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    const msg = e?.message ?? "Unknown error";
+    return NextResponse.json({
+      ok: true,
+      home_id: updated.home_id,
+      name: updated.home_name,
+    });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Unknown error";
     const status = msg.includes("Missing Authorization") ? 401 : 500;
     return NextResponse.json({ error: msg }, { status });
   }
