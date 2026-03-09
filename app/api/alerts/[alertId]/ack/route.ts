@@ -52,19 +52,16 @@ async function ensureMembership(accessToken: string, homeId: string) {
   return match ?? null;
 }
 
-export async function POST(
-  req: Request,
-  ctx: { params: { alertId?: string } | Promise<{ alertId?: string }> }
-) {
+type Ctx = {
+  params: Promise<{ alertId: string }>;
+};
+
+export async function POST(req: Request, ctx: Ctx) {
   try {
     const accessToken = requireBearer(req);
 
-    const rawParams = ctx?.params;
-    const params = typeof (rawParams as Promise<{ alertId?: string }>)?.then === "function"
-      ? await rawParams
-      : rawParams;
-
-    const alertIdParam = decodeURIComponent(String(params?.alertId || "")).trim();
+    const { alertId: rawAlertId } = await ctx.params;
+    const alertIdParam = decodeURIComponent(String(rawAlertId || "")).trim();
 
     if (!alertIdParam) {
       return NextResponse.json({ error: "Missing alertId" }, { status: 400 });
@@ -74,7 +71,6 @@ export async function POST(
       global: { headers: { Authorization: `Bearer ${accessToken}` } },
     });
 
-    // Støtt både intern uuid (id) og gammel ekstern alert_id hvis nødvendig.
     let alertRow: AlertRow | null = null;
 
     const { data: byId, error: byIdError } = await supabase
