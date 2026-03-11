@@ -13,7 +13,6 @@ self.addEventListener("push", (event) => {
   const options = {
     body: data.body || "Ingen aktivitet registrert",
     icon: "/apple-touch-icon.png",
-    badge: "/favicon-32.png",
     data: {
       url: data.url || "/homes",
       home_id: data.home_id || null,
