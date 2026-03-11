@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { sendPushToHome } from "@/lib/server/push";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -14,6 +15,27 @@ function requireBearer(req: Request) {
 
 function norm(s: string) {
   return (s || "").trim().toUpperCase();
+}
+
+function prettifyNameOrEmail(v: string | null) {
+  if (!v) return "Noen";
+  const s = v.trim();
+  if (!s) return "Noen";
+
+  const at = s.indexOf("@");
+  const base = at > 0 ? s.slice(0, at) : s;
+
+  const cleaned = base
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return s;
+
+  return cleaned
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
 }
 
 type MembershipRow = {
@@ -33,6 +55,11 @@ type AlertRow = {
   ack_by: string | null;
   resolved_at: string | null;
   escalation_sent: boolean | null;
+};
+
+type HomeRow = {
+  home_id: string;
+  home_name: string | null;
 };
 
 async function ensureMembership(accessToken: string, homeId: string) {
@@ -135,6 +162,28 @@ export async function POST(req: Request, ctx: Ctx) {
 
     if (updateError) {
       throw new Error(updateError.message);
+    }
+
+    // Hent husnavn til push-tittel
+    const { data: homeData } = await supabase
+      .from("homes")
+      .select("home_id, home_name")
+      .eq("home_id", alertRow.home_id)
+      .maybeSingle();
+
+    const homeRow = (homeData as HomeRow | null) ?? null;
+    const homeName = homeRow?.home_name?.trim() || alertRow.home_id;
+    const displayName = prettifyNameOrEmail(email);
+
+    try {
+      await sendPushToHome(alertRow.home_id, {
+        title: `Trygghet – ${homeName}`,
+        body: `${displayName} sjekker nå situasjonen`,
+        url: `/homes/${encodeURIComponent(alertRow.home_id)}`,
+        home_id: alertRow.home_id,
+      });
+    } catch {
+      // Ack skal lykkes selv om push feiler
     }
 
     return NextResponse.json({ ok: true });
