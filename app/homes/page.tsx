@@ -12,8 +12,8 @@ type HomeRow = {
 
   role: string;
   state: string | null;
-  last_seen: string | null; // heartbeat
-  last_motion: string | null; // motion
+  last_seen: string | null;
+  last_motion: string | null;
   battery_low: boolean | null;
 
   latest_open_alert: null | {
@@ -116,8 +116,6 @@ function isSystemOnline(lastSeenIso: string | null) {
   return minutes <= 90;
 }
 
-// ---------------- PUSH helpers (med timeout + fallback register) ----------------
-
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} (timeout ${ms}ms)`)), ms);
@@ -146,19 +144,20 @@ function urlBase64ToUint8Array(base64String: string) {
 async function getServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
   if (!("serviceWorker" in navigator)) throw new Error("Service worker støttes ikke");
 
-  // 1) Prøv ready raskt
   try {
     return await withTimeout(navigator.serviceWorker.ready, 4000, "Service worker ikke klar");
   } catch {
-    // 2) Fallback: registrer selv (next-pwa bruker /sw.js)
     try {
       await navigator.serviceWorker.register("/sw.js", { scope: "/" });
     } catch (e: any) {
       throw new Error(e?.message || "Kunne ikke registrere service worker");
     }
 
-    // 3) Prøv ready igjen
-    return await withTimeout(navigator.serviceWorker.ready, 8000, "Service worker ble ikke klar etter register");
+    return await withTimeout(
+      navigator.serviceWorker.ready,
+      8000,
+      "Service worker ble ikke klar etter register"
+    );
   }
 }
 
@@ -182,7 +181,11 @@ async function ensurePushSubscription(accessToken: string) {
   const vapid = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "").trim();
   if (!vapid) throw new Error("Mangler NEXT_PUBLIC_VAPID_PUBLIC_KEY i miljøvariabler");
 
-  const existing = await withTimeout(reg.pushManager.getSubscription(), 5000, "Henter eksisterende subscription");
+  const existing = await withTimeout(
+    reg.pushManager.getSubscription(),
+    5000,
+    "Henter eksisterende subscription"
+  );
 
   const sub =
     existing ??
@@ -219,8 +222,6 @@ async function ensurePushSubscription(accessToken: string) {
   if (!res.ok) throw new Error(j?.error || `Subscribe feilet (${res.status})`);
 }
 
-// -------------------------------------------------------------------------------
-
 export default function HomesPage() {
   const router = useRouter();
 
@@ -229,24 +230,24 @@ export default function HomesPage() {
   const [homes, setHomes] = useState<HomeRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Invite UI
   const [inviteBusy, setInviteBusy] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteOpenFor, setInviteOpenFor] = useState<string | null>(null);
   const [inviteByHome, setInviteByHome] = useState<Record<string, string>>({});
 
-  // ACK UI
   const [ackBusy, setAckBusy] = useState<string | null>(null);
   const [ackError, setAckError] = useState<string | null>(null);
 
-  // Push UI
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
 
-  // Origin for join-link
+  const [renameBusy, setRenameBusy] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameOpenFor, setRenameOpenFor] = useState<string | null>(null);
+  const [renameValueByHome, setRenameValueByHome] = useState<Record<string, string>>({});
+
   const [origin, setOrigin] = useState<string>("");
 
-  // Avoid double-load
   const didLoad = useRef(false);
 
   useEffect(() => {
@@ -357,6 +358,65 @@ export default function HomesPage() {
   function joinUrl(code: string) {
     const base = origin || "";
     return `${base}/join?code=${encodeURIComponent(code)}`;
+  }
+
+  function openRename(home: HomeRow) {
+    const currentName = (home.home_name || "").trim() || home.home_id;
+    setRenameError(null);
+    setRenameOpenFor(home.home_id);
+    setRenameValueByHome((prev) => ({
+      ...prev,
+      [home.home_id]: currentName,
+    }));
+  }
+
+  async function saveRename(home_id: string) {
+    setRenameError(null);
+    setRenameBusy(home_id);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+
+      if (!token) {
+        setRenameError("Du er ikke innlogget. Logg inn på nytt.");
+        router.replace("/login");
+        return;
+      }
+
+      const name = String(renameValueByHome[home_id] ?? "").trim();
+
+      const res = await fetch(`/api/homes/${encodeURIComponent(home_id)}/rename`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name }),
+      });
+
+      const j = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setRenameError(j?.error || `Rename feilet (${res.status})`);
+        return;
+      }
+
+      setHomes((prev) =>
+        prev.map((h) =>
+          h.home_id === home_id
+            ? {
+                ...h,
+                home_name: name,
+              }
+            : h
+        )
+      );
+
+      setRenameOpenFor(null);
+    } finally {
+      setRenameBusy(null);
+    }
   }
 
   async function createInvite(home_id: string) {
@@ -478,7 +538,6 @@ export default function HomesPage() {
 
   return (
     <main className="min-h-screen bg-gray-50">
-      {/* Topbar */}
       <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
@@ -529,10 +588,17 @@ export default function HomesPage() {
             </div>
           </div>
         )}
+
+        {renameError && (
+          <div className="mx-auto max-w-2xl px-4 pb-3">
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+              {renameError}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mx-auto max-w-2xl p-4">
-        {/* No homes */}
         {!hasHomes && (
           <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             <h2 className="text-base font-semibold text-gray-900">Du er ikke koblet til noe hus ennå</h2>
@@ -558,7 +624,6 @@ export default function HomesPage() {
           </div>
         )}
 
-        {/* Homes list */}
         {homes.map((h) => {
           const stateLower = (h.state || "").toLowerCase();
           const isRedCard = stateLower === "red";
@@ -566,6 +631,7 @@ export default function HomesPage() {
 
           const isAdmin = (h.role || "").toLowerCase() === "admin";
           const isInviteOpen = inviteOpenFor === h.home_id;
+          const isRenameOpen = renameOpenFor === h.home_id;
           const code = inviteByHome[h.home_id] || "";
           const link = code ? joinUrl(code) : "";
 
@@ -594,7 +660,6 @@ export default function HomesPage() {
                 <div className={`w-2 rounded-full ${meta.bar}`} />
 
                 <div className="min-w-0 flex-1">
-                  {/* Header */}
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -645,6 +710,16 @@ export default function HomesPage() {
                       {isAdmin && (
                         <button
                           type="button"
+                          onClick={() => openRename(h)}
+                          className="rounded-xl border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-white"
+                        >
+                          Endre navn
+                        </button>
+                      )}
+
+                      {isAdmin && (
+                        <button
+                          type="button"
                           onClick={() => (isInviteOpen ? setInviteOpenFor(null) : createInvite(h.home_id))}
                           disabled={inviteBusy === h.home_id}
                           className={`rounded-xl px-3 py-2 text-sm shadow-sm disabled:opacity-60 ${meta.cta}`}
@@ -655,7 +730,44 @@ export default function HomesPage() {
                     </div>
                   </div>
 
-                  {/* RØD-boks: vises kun på rød kort */}
+                  {isAdmin && isRenameOpen && (
+                    <div className="mt-4 rounded-2xl border border-gray-200 bg-white/85 p-4 ring-1 ring-black/5">
+                      <div className="text-sm font-semibold text-gray-900">Endre navn på hus</div>
+
+                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                        <input
+                          type="text"
+                          value={renameValueByHome[h.home_id] ?? ""}
+                          onChange={(e) =>
+                            setRenameValueByHome((prev) => ({
+                              ...prev,
+                              [h.home_id]: e.target.value,
+                            }))
+                          }
+                          placeholder="Skriv nytt navn"
+                          className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => saveRename(h.home_id)}
+                          disabled={renameBusy === h.home_id}
+                          className="rounded-xl bg-gray-900 px-4 py-2 text-sm text-white shadow-sm hover:bg-gray-800 disabled:opacity-60"
+                        >
+                          {renameBusy === h.home_id ? "Lagrer…" : "Lagre"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setRenameOpenFor(null)}
+                          className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50"
+                        >
+                          Avbryt
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {isRedCard && (
                     <div className="mt-4 rounded-2xl border border-red-400 bg-white/90 p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
@@ -702,7 +814,6 @@ export default function HomesPage() {
                     </div>
                   )}
 
-                  {/* Kun "Sist bevegelse" på kortet */}
                   <div className="mt-4 rounded-xl bg-white/80 p-3 ring-1 ring-black/5">
                     <div className="text-xs text-gray-600">Sist bevegelse</div>
                     <div className="mt-1 text-sm font-semibold text-gray-900">{formatDate(h.last_motion)}</div>
@@ -715,7 +826,6 @@ export default function HomesPage() {
                     </div>
                   )}
 
-                  {/* Invite box */}
                   {isAdmin && isInviteOpen && (
                     <div className="mt-4 rounded-2xl border border-gray-200 bg-white/80 p-4 ring-1 ring-black/5">
                       <div className="text-sm text-gray-700">
@@ -773,7 +883,6 @@ export default function HomesPage() {
           );
         })}
 
-        {/* Footer link */}
         {hasHomes && (
           <div className="mt-8 text-center text-xs text-gray-500">
             Trenger du å bli med i et annet hus?{" "}
