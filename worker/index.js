@@ -2,17 +2,18 @@
 
 self.addEventListener("push", (event) => {
   let data = {};
+
   try {
     data = event.data ? event.data.json() : {};
   } catch {
-    data = { title: "Trygghet", body: "Varsel" };
+    data = {};
   }
 
   const title = data.title || "Trygghet";
   const options = {
-    body: data.body || "Ny hendelse",
-    icon: data.icon || "/icon-192.png",
-    badge: data.badge || "/icon-192.png",
+    body: data.body || "Ingen aktivitet registrert",
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
     data: {
       url: data.url || "/homes",
       home_id: data.home_id || null,
@@ -24,19 +25,14 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+
   const url = event.notification?.data?.url || "/homes";
 
   event.waitUntil(
-    (async () => {
-      const allClients = await clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-
-      const existing = allClients.find((c) => c.url.includes(url));
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientsArr) => {
+      const existing = clientsArr.find((c) => c.url.includes(url));
       if (existing) return existing.focus();
-
       return clients.openWindow(url);
-    })()
+    })
   );
 });
