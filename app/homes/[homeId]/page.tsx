@@ -63,7 +63,6 @@ function prettifyNameOrEmail(v: string | null) {
   const s = v.trim();
   if (!s) return null;
 
-  // hvis det ser ut som epost -> ta delen før @ og "title-case" litt
   const at = s.indexOf("@");
   const base = at > 0 ? s.slice(0, at) : s;
 
@@ -74,7 +73,6 @@ function prettifyNameOrEmail(v: string | null) {
 
   if (!cleaned) return s;
 
-  // enkel title-case
   return cleaned
     .split(" ")
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
@@ -105,7 +103,7 @@ export default function HomePage() {
 
   const historyAlerts = useMemo(() => {
     return alerts
-      .filter((a) => a.type === "red_inactivity") // kun red events
+      .filter((a) => a.type === "red_inactivity")
       .slice(0, 30);
   }, [alerts]);
 
@@ -151,38 +149,52 @@ export default function HomePage() {
     run();
   }, [homeId]);
 
-  if (loading) return <div className="p-4">Laster...</div>;
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-gray-50 p-4">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          Laster…
+        </div>
+      </main>
+    );
+  }
 
   const title = (home?.home_name || "").trim() || homeId;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <main className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
-        <Link className="text-sm text-blue-700 underline" href="/homes">
-          ← Tilbake
-        </Link>
-
-        <h1 className="mt-2 text-2xl sm:text-3xl font-bold">{title}</h1>
-
-        <div className="text-sm text-gray-600">
-          ID: <span className="font-mono">{homeId}</span>
+        <div className="mb-4">
+          <Link
+            href="/homes"
+            className="inline-flex items-center rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 shadow-sm hover:bg-gray-50"
+          >
+            ← Tilbake
+          </Link>
         </div>
 
-        <p className="mt-1 text-sm text-gray-600 break-all">
-          Innlogget som: {session?.user.email}
-        </p>
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">{title}</h1>
 
-        <div className="mt-6 rounded-2xl border bg-white shadow-sm">
-          <div className="p-4 border-b font-semibold">Historikk</div>
+          <div className="mt-2 text-sm text-gray-600">
+            ID: <span className="font-mono">{homeId}</span>
+          </div>
+
+          <p className="mt-1 break-all text-sm text-gray-600">
+            Innlogget som: {session?.user.email}
+          </p>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-200 p-4 font-semibold text-gray-900">Historikk</div>
 
           {historyAlerts.length === 0 ? (
             <div className="p-4 text-sm text-gray-600">Ingen hendelser ennå.</div>
           ) : (
-            <ul className="divide-y">
+            <ul className="divide-y divide-gray-200">
               {historyAlerts.map((a) => {
                 const titleText = translateType(a.type);
 
-                // “menneskelig” statuslinje
                 if (a.acknowledged) {
                   const when = a.acknowledged_at;
                   const ago = timeAgo(when);
@@ -212,7 +224,6 @@ export default function HomePage() {
                   );
                 }
 
-                // Ikke sjekket: vis når den startet
                 const started = a.triggered_at;
                 const startedAgo = timeAgo(started);
 
@@ -222,7 +233,12 @@ export default function HomePage() {
                       <div className="min-w-0">
                         <div className="font-semibold text-gray-900">{titleText}</div>
                         <div className="mt-2 text-sm text-gray-700">
-                          Ikke sjekket{startedAgo ? ` – startet ${startedAgo}` : started ? ` – startet ${formatDate(started)}` : ""}
+                          Ikke sjekket
+                          {startedAgo
+                            ? ` – startet ${startedAgo}`
+                            : started
+                            ? ` – startet ${formatDate(started)}`
+                            : ""}
                         </div>
                       </div>
 
@@ -236,9 +252,11 @@ export default function HomePage() {
             </ul>
           )}
 
-          <div className="p-4 border-t text-xs text-gray-500">Viser siste 30 røde hendelser.</div>
+          <div className="border-t border-gray-200 p-4 text-xs text-gray-500">
+            Viser siste 30 røde hendelser.
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
