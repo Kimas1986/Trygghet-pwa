@@ -166,6 +166,22 @@ async function getServiceWorkerRegistration(): Promise<ServiceWorkerRegistration
   }
 }
 
+async function hasActivePushSubscription() {
+  if (typeof window === "undefined") return false;
+  if (!("serviceWorker" in navigator)) return false;
+  if (!("PushManager" in window)) return false;
+  if (!("Notification" in window)) return false;
+  if (Notification.permission !== "granted") return false;
+
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    return Boolean(sub);
+  } catch {
+    return false;
+  }
+}
+
 async function ensurePushSubscription(accessToken: string) {
   if (!("PushManager" in window)) throw new Error("Push støttes ikke på denne enheten");
   if (!("Notification" in window)) throw new Error("Varsler støttes ikke på denne enheten");
@@ -245,6 +261,7 @@ export default function HomesPage() {
 
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
+  const [pushReady, setPushReady] = useState(false);
 
   const [renameBusy, setRenameBusy] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -268,6 +285,10 @@ export default function HomesPage() {
     };
 
     window.addEventListener("beforeinstallprompt", handler);
+
+    hasActivePushSubscription().then((active) => {
+      setPushReady(active);
+    });
 
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
@@ -363,6 +384,7 @@ export default function HomesPage() {
       if (!token) return router.replace("/login");
 
       await ensurePushSubscription(token);
+      setPushReady(true);
       alert("Push-varsler aktivert ✅");
     } catch (e: any) {
       const msg = e?.message ?? "Klarte ikke aktivere push-varsler";
@@ -566,7 +588,7 @@ export default function HomesPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 pb-24">
+    <main className="min-h-screen bg-gray-50 pb-32">
       <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
@@ -575,14 +597,16 @@ export default function HomesPage() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={onEnablePush}
-              disabled={pushBusy}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50 disabled:opacity-60"
-            >
-              {pushBusy ? "Aktiverer…" : "Aktiver push-varsler"}
-            </button>
+            {!pushReady && (
+              <button
+                type="button"
+                onClick={onEnablePush}
+                disabled={pushBusy}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50 disabled:opacity-60"
+              >
+                {pushBusy ? "Aktiverer…" : "Aktiver push-varsler"}
+              </button>
+            )}
 
             <button
               type="button"
@@ -924,8 +948,19 @@ export default function HomesPage() {
         )}
       </div>
 
-      {installPrompt && (
-        <div className="fixed bottom-4 left-0 right-0 z-20 flex justify-center px-4">
+      <div className="fixed bottom-4 left-0 right-0 z-20 flex flex-col items-center gap-2 px-4">
+        {!pushReady && (
+          <button
+            type="button"
+            onClick={onEnablePush}
+            disabled={pushBusy}
+            className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-900 shadow-lg hover:bg-gray-50 disabled:opacity-60"
+          >
+            {pushBusy ? "Aktiverer…" : "🔔 Aktiver push-varsler"}
+          </button>
+        )}
+
+        {installPrompt && (
           <button
             type="button"
             onClick={installApp}
@@ -933,8 +968,8 @@ export default function HomesPage() {
           >
             📲 Installer Trygghet
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </main>
   );
 }
