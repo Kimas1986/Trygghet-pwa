@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendPushToHome } from "@/lib/server/push";
+import {
+  evaluateHomeState,
+  resolveHomePatchFromEvaluatedState,
+  shouldCreateRedAlert,
+  shouldEscalateOpenAlert,
+  isRedWindowNow,
+} from "@/lib/server/state-engine";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -13,9 +20,6 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GREY_THRESHOLD_MIN = Number(process.env.GREY_THRESHOLD_MINUTES || 90);
 const RED_THRESHOLD_HOURS = Number(process.env.RED_THRESHOLD_HOURS || 6);
 const SMS_ESCALATION_MIN = Number(process.env.SMS_ESCALATION_MINUTES || 30);
-
-const RED_THRESHOLD_MS = RED_THRESHOLD_HOURS * 60 * 60 * 1000;
-const GREY_THRESHOLD_MS = GREY_THRESHOLD_MIN * 60 * 1000;
 
 type HomeRow = {
   id: string;
@@ -48,34 +52,6 @@ type AlertRow = {
 
 function json(status: number, data: unknown) {
   return NextResponse.json(data, { status });
-}
-
-function parseDateOrNull(v: unknown): Date | null {
-  if (!v) return null;
-  const d = new Date(String(v));
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function iso(d: Date) {
-  return d.toISOString();
-}
-
-function normMode(v: unknown): "home" | "away" | null {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (s === "away") return "away";
-  if (s === "home") return "home";
-  return null;
-}
-
-function nowOsloHour(d: Date) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/Oslo",
-    hour: "2-digit",
-    hour12: false,
-  }).formatToParts(d);
-
-  const hh = parts.find((p) => p.type === "hour")?.value || "00";
-  return Number(hh);
 }
 
 function getAdminClient() {
@@ -177,25 +153,20 @@ async function createAlertForHome(homeId: string, windowKey: string, nowIso: str
 async function updateHome(homeId: string, fields: Record<string, unknown>) {
   const admin = getAdminClient();
 
-  const { error } = await admin
-    .from("homes")
-    .update(fields)
-    .eq("home_id", homeId);
+  const { error } = await admin.from("homes").update(fields).eq("home_id", homeId);
 
   if (error) {
     throw new Error(`Supabase homes update failed: ${error.message}`);
   }
 }
 
-async function setAlertEscalationSent(alertDbId: string, nowIso: string) {
+async function setAlertEscalationSent(alertDbId: string) {
   const admin = getAdminClient();
 
   const { error } = await admin
     .from("alerts")
     .update({
       escalation_sent: true,
-      resolved_at: null,
-      updated_at: nowIso,
     })
     .eq("id", alertDbId);
 
@@ -222,19 +193,17 @@ export async function POST(req: Request) {
       return json(401, { error: "Unauthorized" });
     }
 
-    const windowParam = urlObj.searchParams.get("window");
-    const doRedExplicit =
-      windowParam === "12" || windowParam === "18" || windowParam === "23";
+    const windowParamRaw = urlObj.searchParams.get("window");
+    const explicitWindow =
+      windowParamRaw === "12" || windowParamRaw === "18" || windowParamRaw === "23"
+        ? windowParamRaw
+        : null;
+
     const forceRed = urlObj.searchParams.get("force_red") === "1";
     const doGrey = urlObj.searchParams.get("grey") !== "0";
 
     const now = new Date();
-    const nowIso = iso(now);
-    const osloHour = nowOsloHour(now);
-
-    const doRedAuto =
-      !doRedExplicit && (osloHour === 12 || osloHour === 18 || osloHour === 23);
-    const redEnabled = forceRed || doRedExplicit || doRedAuto;
+    const redEnabled = forceRed || Boolean(explicitWindow) || isRedWindowNow(now);
 
     const admin = getAdminClient();
 
@@ -265,106 +234,111 @@ export async function POST(req: Request) {
       if (!homeId) continue;
 
       try {
-        const lastSeen = parseDateOrNull(rec.last_seen);
-        const lastMotion = parseDateOrNull(rec.last_motion);
-        const currentState = String(rec.state ?? "").toLowerCase();
-
-        const mode = normMode(rec.mode);
-        const isAway = mode === "away";
-
-        const offlineTooLong =
-          doGrey &&
-          (!lastSeen || now.getTime() - lastSeen.getTime() > GREY_THRESHOLD_MS);
-
-        const inactivityTooLong =
-          redEnabled &&
-          !offlineTooLong &&
-          !isAway &&
-          (!lastMotion || now.getTime() - lastMotion.getTime() > RED_THRESHOLD_MS);
-
-        const fieldsToUpdate: Record<string, unknown> = {};
-        let willPatch = false;
-
-        if (offlineTooLong) {
-          if (currentState !== "grey") {
-            fieldsToUpdate.state = "grey";
-            willPatch = true;
-            greySet++;
+        const evaluated = evaluateHomeState(
+          {
+            home_id: rec.home_id,
+            state: rec.state,
+            mode: rec.mode,
+            last_seen: rec.last_seen,
+            last_motion: rec.last_motion,
+            last_alert_window: rec.last_alert_window,
+            last_alert_time: rec.last_alert_time,
+          },
+          {
+            greyThresholdMinutes: GREY_THRESHOLD_MIN,
+            redThresholdHours: RED_THRESHOLD_HOURS,
+          },
+          {
+            now,
+            redEnabled,
+            doGrey,
           }
-        } else if (inactivityTooLong) {
-          const becameRed = currentState !== "red";
+        );
 
-          if (becameRed) {
-            fieldsToUpdate.state = "red";
-            willPatch = true;
-            redSet++;
+        const currentState = String(rec.state ?? "").trim().toLowerCase();
+        const statePatch = resolveHomePatchFromEvaluatedState(currentState, evaluated);
+        const fieldsToUpdate: Record<string, unknown> = { ...statePatch };
+        let willPatch = Object.keys(fieldsToUpdate).length > 0;
 
-            try {
-              await sendPushToHome(homeId, {
-                title: "Trygghet: Ingen aktivitet",
-                body: "Uvanlig lang tid uten bevegelse. Trykk for status.",
-                url: `/homes/${encodeURIComponent(homeId)}`,
-                home_id: homeId,
-              });
-              pushSent++;
-            } catch {
-              warnings.push(`push failed for ${homeId}`);
-            }
-          }
+        if (evaluated.nextState === "grey" && currentState !== "grey") {
+          greySet++;
+        }
 
-          const lastAlertWindow = rec.last_alert_window ? String(rec.last_alert_window) : "";
-          const lastAlertTime = parseDateOrNull(rec.last_alert_time);
-          const windowKey = doRedExplicit
-            ? `kl ${windowParam}`
-            : doRedAuto
-            ? `kl ${osloHour}`
-            : "red";
-
-          const recentlyAlerted =
-            lastAlertWindow === windowKey &&
-            lastAlertTime &&
-            now.getTime() - lastAlertTime.getTime() < 12 * 60 * 60 * 1000;
-
-          if (!recentlyAlerted) {
-            await createAlertForHome(homeId, windowKey, nowIso);
-            alertsCreated++;
-
-            fieldsToUpdate.last_alert_window = windowKey;
-            fieldsToUpdate.last_alert_time = nowIso;
-            willPatch = true;
-          }
+        if (evaluated.nextState === "red" && currentState !== "red") {
+          redSet++;
 
           try {
-            const openAlert = await getOpenAlertForHome(homeId);
-            const trig = parseDateOrNull(openAlert?.triggered_at);
-            const escSent = Boolean(openAlert?.escalation_sent ?? false);
+            await sendPushToHome(homeId, {
+              title: "Trygghet: Ingen aktivitet",
+              body: "Uvanlig lang tid uten bevegelse. Trykk for status.",
+              url: `/homes/${encodeURIComponent(homeId)}`,
+              home_id: homeId,
+            });
+            pushSent++;
+          } catch {
+            warnings.push(`push failed for ${homeId}`);
+          }
+        }
 
-            if (openAlert && trig && !escSent) {
-              const ageMin = (now.getTime() - trig.getTime()) / (60 * 1000);
+        if (evaluated.nextState === "green" && currentState !== "green") {
+          greenSet++;
+        }
 
-              if (ageMin >= SMS_ESCALATION_MIN) {
-                const recipients = await getSmsRecipientsForHome(homeId);
+        const alertDecision = shouldCreateRedAlert({
+          home: {
+            home_id: rec.home_id,
+            state: rec.state,
+            mode: rec.mode,
+            last_seen: rec.last_seen,
+            last_motion: rec.last_motion,
+            last_alert_window: rec.last_alert_window,
+            last_alert_time: rec.last_alert_time,
+          },
+          now,
+          explicitWindow,
+          redEnabled,
+          nextState: evaluated.nextState,
+        });
 
-                if (recipients.length === 0) {
-                  smsSkippedNoRecipients++;
-                } else {
-                  const msg = `TRYGGHET: Ingen bevegelse på ${homeId} i over ${RED_THRESHOLD_HOURS} timer. Sjekk appen.`;
-                  await sendSmsViaMake(homeId, recipients, msg);
-                  await setAlertEscalationSent(openAlert.id, nowIso);
-                  smsSent++;
-                }
-              }
+        if (alertDecision.shouldCreate) {
+          const nowIso = now.toISOString();
+
+          await createAlertForHome(homeId, alertDecision.windowKey, nowIso);
+          alertsCreated++;
+
+          fieldsToUpdate.last_alert_window = alertDecision.windowKey;
+          fieldsToUpdate.last_alert_time = nowIso;
+          willPatch = true;
+        }
+
+        try {
+          const openAlert = await getOpenAlertForHome(homeId);
+
+          const shouldEscalate = shouldEscalateOpenAlert({
+            triggered_at: openAlert?.triggered_at ?? null,
+            escalation_sent: openAlert?.escalation_sent ?? false,
+            acknowledged: openAlert?.acknowledged ?? false,
+            acknowledged_at: openAlert?.acknowledged_at ?? null,
+            resolved_at: openAlert?.resolved_at ?? null,
+            now,
+            smsEscalationMinutes: SMS_ESCALATION_MIN,
+          });
+
+          if (openAlert && shouldEscalate) {
+            const recipients = await getSmsRecipientsForHome(homeId);
+
+            if (recipients.length === 0) {
+              smsSkippedNoRecipients++;
+            } else {
+              const msg = `TRYGGHET: Ingen bevegelse på ${homeId} i over ${RED_THRESHOLD_HOURS} timer. Sjekk appen.`;
+              await sendSmsViaMake(homeId, recipients, msg);
+              await setAlertEscalationSent(openAlert.id);
+              smsSent++;
             }
-          } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : "unknown";
-            warnings.push(`sms escalation failed for ${homeId}: ${msg}`);
           }
-        } else {
-          if (currentState !== "green") {
-            fieldsToUpdate.state = "green";
-            willPatch = true;
-            greenSet++;
-          }
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : "unknown";
+          warnings.push(`sms escalation failed for ${homeId}: ${msg}`);
         }
 
         if (willPatch) {
@@ -379,7 +353,6 @@ export async function POST(req: Request) {
     return json(200, {
       ok: true,
       red_enabled: redEnabled,
-      osloHour,
       greySet,
       redSet,
       greenSet,
@@ -393,7 +366,7 @@ export async function POST(req: Request) {
         red_hours: RED_THRESHOLD_HOURS,
         sms_escalation_minutes: SMS_ESCALATION_MIN,
       },
-      note: "checks now use Supabase homes + alerts",
+      note: "checks now use state-engine + Supabase homes + alerts",
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unknown error";

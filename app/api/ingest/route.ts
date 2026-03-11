@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { buildHomePatchFromIngest } from "@/lib/server/state-engine";
 
 const INGEST_SECRET = process.env.INGEST_SECRET || "";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -112,10 +113,9 @@ export async function POST(req: Request) {
 
     const admin = getAdminClient();
 
-    // Hjemmet må allerede finnes i homes.
     const { data: existingHome, error: existingErr } = await admin
       .from("homes")
-      .select("id, home_id, state")
+      .select("id, home_id, state, mode, last_seen, last_motion, last_alert_window, last_alert_time")
       .eq("home_id", home_id)
       .maybeSingle();
 
@@ -140,38 +140,18 @@ export async function POST(req: Request) {
       parseIsoOrNull(body.last_seen) ??
       null;
 
-    const nowIso = new Date().toISOString();
-
-    const fields: Record<string, unknown> = {
-      last_seen: seenIso ?? nowIso,
-    };
-
-    if (batteryLow !== undefined) {
-      fields.battery_low = batteryLow;
-    }
-
-    if (systemOk !== undefined) {
-      fields.system_ok = systemOk;
-    }
-
-    if (door_open) {
-      fields.mode = "away";
-      fields.mode_updated_at = nowIso;
-      fields.state = "green";
-    }
-
-    if (motionBool || motionIso) {
-      fields.last_motion = motionIso ?? nowIso;
-      fields.mode = "home";
-      fields.mode_updated_at = nowIso;
-      fields.state = "green";
-    }
-
-    // Ved ren heartbeat oppdaterer vi bare last_seen (+ evt battery/system),
-    // og lar state være urørt.
-    if (heartbeat && !motionBool && !motionIso && !door_open) {
-      // bevisst ingen ekstra state-endring her
-    }
+    const fields = buildHomePatchFromIngest(
+      {
+        motion: motionBool,
+        door_open,
+        heartbeat,
+        battery_low: batteryLow,
+        system_ok: systemOk,
+        last_motion_at: motionIso,
+        last_seen_at: seenIso,
+      },
+      new Date()
+    ) as Record<string, unknown>;
 
     const { data: updatedHome, error: updateErr } = await admin
       .from("homes")
