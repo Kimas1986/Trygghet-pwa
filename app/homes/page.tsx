@@ -39,6 +39,11 @@ type HomeRow = {
   };
 };
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
 function formatDate(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -246,12 +251,25 @@ export default function HomesPage() {
   const [renameOpenFor, setRenameOpenFor] = useState<string | null>(null);
   const [renameValueByHome, setRenameValueByHome] = useState<Record<string, string>>({});
 
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+
   const [origin, setOrigin] = useState<string>("");
 
   const didLoad = useRef(false);
 
   useEffect(() => {
     setOrigin(window.location.origin);
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e as BeforeInstallPromptEvent);
+    };
+
+    window.addEventListener("beforeinstallprompt", handler);
+
+    return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
   useEffect(() => {
@@ -352,6 +370,17 @@ export default function HomesPage() {
       alert(msg);
     } finally {
       setPushBusy(false);
+    }
+  }
+
+  async function installApp() {
+    if (!installPrompt) return;
+
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+
+    if (choice.outcome === "accepted") {
+      setInstallPrompt(null);
     }
   }
 
@@ -537,7 +566,7 @@ export default function HomesPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50">
+    <main className="min-h-screen bg-gray-50 pb-24">
       <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
@@ -894,6 +923,18 @@ export default function HomesPage() {
           </div>
         )}
       </div>
+
+      {installPrompt && (
+        <div className="fixed bottom-4 left-0 right-0 z-20 flex justify-center px-4">
+          <button
+            type="button"
+            onClick={installApp}
+            className="rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white shadow-lg hover:bg-gray-800"
+          >
+            📲 Installer Trygghet
+          </button>
+        </div>
+      )}
     </main>
   );
 }
