@@ -268,13 +268,16 @@ export async function POST(req: Request) {
           redSet++;
 
           try {
-            await sendPushToHome(homeId, {
-              title: "Trygghet: Ingen aktivitet",
-              body: "Uvanlig lang tid uten bevegelse. Trykk for status.",
+            const homeName = rec.home_name?.trim() || rec.home_id;
+
+            const pushResult = await sendPushToHome(homeId, {
+              title: `Trygghet – ${homeName}`,
+              body: `⚠️ Ingen bevegelse registrert på ${RED_THRESHOLD_HOURS} timer`,
               url: `/homes/${encodeURIComponent(homeId)}`,
               home_id: homeId,
             });
-            pushSent++;
+
+            pushSent += pushResult?.sent ?? 0;
           } catch {
             warnings.push(`push failed for ${homeId}`);
           }

@@ -164,7 +164,6 @@ export async function POST(req: Request, ctx: Ctx) {
       throw new Error(updateError.message);
     }
 
-    // Hent husnavn til push-tittel
     const { data: homeData } = await supabase
       .from("homes")
       .select("home_id, home_name")
@@ -178,7 +177,7 @@ export async function POST(req: Request, ctx: Ctx) {
     try {
       await sendPushToHome(alertRow.home_id, {
         title: `Trygghet – ${homeName}`,
-        body: `${displayName} sjekker nå situasjonen`,
+        body: `👤 ${displayName} sjekker nå situasjonen`,
         url: `/homes/${encodeURIComponent(alertRow.home_id)}`,
         home_id: alertRow.home_id,
       });

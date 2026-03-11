@@ -345,9 +345,9 @@ export default function HomesPage() {
       if (!token) return router.replace("/login");
 
       await ensurePushSubscription(token);
-      alert("Varsler aktivert ✅");
+      alert("Push-varsler aktivert ✅");
     } catch (e: any) {
-      const msg = e?.message ?? "Klarte ikke aktivere varsler";
+      const msg = e?.message ?? "Klarte ikke aktivere push-varsler";
       setPushError(msg);
       alert(msg);
     } finally {
@@ -552,7 +552,7 @@ export default function HomesPage() {
               disabled={pushBusy}
               className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50 disabled:opacity-60"
             >
-              {pushBusy ? "Aktiverer…" : "Aktiver varsler"}
+              {pushBusy ? "Aktiverer…" : "Aktiver push-varsler"}
             </button>
 
             <button
@@ -704,7 +704,7 @@ export default function HomesPage() {
                         href={`/homes/${encodeURIComponent(h.home_id)}`}
                         className="rounded-xl border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-white"
                       >
-                        Se detaljer
+                        Vis historikk
                       </Link>
 
                       {isAdmin && (
