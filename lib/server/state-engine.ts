@@ -1,12 +1,15 @@
 export type HomeState = "green" | "red" | "grey";
-export type HomeMode = "home" | "away";
+export type HomeMode = "normal" | "away";
 
 export type HomeLike = {
   home_id: string;
   state?: string | null;
   mode?: string | null;
+  mode_updated_at?: string | null;
   last_seen?: string | null;
   last_motion?: string | null;
+  last_door_at?: string | null;
+  pending_away_since?: string | null;
   last_alert_window?: string | null;
   last_alert_time?: string | null;
 };
@@ -29,6 +32,8 @@ export type ThresholdConfig = {
 export type IngestPatch = {
   last_seen?: string;
   last_motion?: string;
+  last_door_at?: string;
+  pending_away_since?: string | null;
   mode?: HomeMode;
   mode_updated_at?: string;
   state?: HomeState;
@@ -61,8 +66,13 @@ function iso(d: Date) {
 
 export function normMode(v: unknown): HomeMode | null {
   const s = String(v ?? "").trim().toLowerCase();
-  if (s === "home") return "home";
+
+  // Bakoverkompatibilitet:
+  // gammel verdi "home" tolkes som "normal"
+  if (s === "normal") return "normal";
+  if (s === "home") return "normal";
   if (s === "away") return "away";
+
   return null;
 }
 
@@ -99,11 +109,10 @@ export function isRedWindowNow(now: Date) {
  * Viktig regel:
  * - motion kan sette huset grønt
  * - heartbeat skal IKKE automatisk sette huset grønt
+ * - door_open skal IKKE direkte sette away
  * - ack påvirker alerts, ikke home.state
  */
 export function buildHomePatchFromIngest(input: IngestInput, now = new Date()): IngestPatch {
-  const nowIso = iso(now);
-
   const patch: IngestPatch = {};
 
   if (typeof input.battery_low === "boolean") {
@@ -119,22 +128,112 @@ export function buildHomePatchFromIngest(input: IngestInput, now = new Date()): 
 
   const motionAt = parseDateOrNull(input.last_motion_at);
 
-  if (input.door_open === true) {
-    patch.mode = "away";
-    patch.mode_updated_at = nowIso;
-  }
-
   if (input.motion === true || motionAt) {
     patch.last_motion = iso(motionAt ?? now);
     patch.last_seen = iso(motionAt ?? seenAt ?? now);
-    patch.mode = "home";
-    patch.mode_updated_at = nowIso;
     patch.state = "green";
   }
 
   if (input.heartbeat === true && input.motion !== true && !motionAt && input.door_open !== true) {
     // Bevisst: heartbeat oppdaterer kun last_seen
     // og setter IKKE state = green
+  }
+
+  return patch;
+}
+
+/**
+ * Away-regler ved ingest:
+ * - door_open i normal => start pending away
+ * - motion i normal => nullstill pending away
+ * - motion i away => hjemkomst kun hvis dør nylig trigget
+ */
+export function resolveAwayPatchFromIngest(
+  home: Pick<HomeLike, "mode" | "last_door_at" | "pending_away_since">,
+  input: IngestInput,
+  options?: {
+    now?: Date;
+    returnHomeWindowMinutes?: number;
+  }
+): IngestPatch {
+  const now = options?.now ?? new Date();
+  const nowIso = iso(now);
+  const returnHomeWindowMinutes = options?.returnHomeWindowMinutes ?? 5;
+
+  const patch: IngestPatch = {};
+  const mode = normMode(home.mode);
+
+  if (input.door_open === true) {
+    patch.last_door_at = nowIso;
+
+    if (mode !== "away") {
+      patch.pending_away_since = nowIso;
+    }
+  }
+
+  const motionAt = parseDateOrNull(input.last_motion_at);
+  const hasMotion = input.motion === true || !!motionAt;
+
+  if (hasMotion) {
+    if (mode === "away") {
+      const lastDoorAt = parseDateOrNull(home.last_door_at);
+
+      if (lastDoorAt) {
+        const ageMs = now.getTime() - lastDoorAt.getTime();
+        const windowMs = returnHomeWindowMinutes * 60 * 1000;
+
+        if (ageMs <= windowMs) {
+          patch.mode = "normal";
+          patch.mode_updated_at = nowIso;
+          patch.pending_away_since = null;
+        }
+      }
+    } else {
+      patch.pending_away_since = null;
+    }
+  }
+
+  return patch;
+}
+
+/**
+ * Away-regler ved checks/run:
+ * - pending away eldre enn delay
+ * - ingen motion etter pending started
+ * => sett away
+ */
+export function resolveAwayPatchFromChecks(
+  home: Pick<HomeLike, "mode" | "pending_away_since" | "last_motion">,
+  options?: {
+    now?: Date;
+    awayDelayMinutes?: number;
+  }
+): Partial<HomeLike> {
+  const now = options?.now ?? new Date();
+  const awayDelayMinutes = options?.awayDelayMinutes ?? 10;
+
+  const patch: Partial<HomeLike> = {};
+  const mode = normMode(home.mode);
+
+  if (mode === "away") {
+    return patch;
+  }
+
+  const pending = parseDateOrNull(home.pending_away_since);
+  if (!pending) {
+    return patch;
+  }
+
+  const pendingAgeMs = now.getTime() - pending.getTime();
+  const delayMs = awayDelayMinutes * 60 * 1000;
+
+  const lastMotion = parseDateOrNull(home.last_motion);
+  const motionAfterPending = !!lastMotion && lastMotion.getTime() >= pending.getTime();
+
+  if (pendingAgeMs >= delayMs && !motionAfterPending) {
+    patch.mode = "away";
+    patch.mode_updated_at = iso(now);
+    patch.pending_away_since = null;
   }
 
   return patch;

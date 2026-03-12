@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { sendPushToHome } from "@/lib/server/push";
 import {
   evaluateHomeState,
+  resolveAwayPatchFromChecks,
   resolveHomePatchFromEvaluatedState,
   shouldCreateRedAlert,
   shouldEscalateOpenAlert,
@@ -20,6 +21,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GREY_THRESHOLD_MIN = Number(process.env.GREY_THRESHOLD_MINUTES || 90);
 const RED_THRESHOLD_HOURS = Number(process.env.RED_THRESHOLD_HOURS || 6);
 const SMS_ESCALATION_MIN = Number(process.env.SMS_ESCALATION_MINUTES || 30);
+const AWAY_DELAY_MIN = Number(process.env.AWAY_DELAY_MINUTES || 10);
 
 type HomeRow = {
   id: string;
@@ -30,6 +32,8 @@ type HomeRow = {
   last_motion: string | null;
   mode: string | null;
   mode_updated_at: string | null;
+  pending_away_since: string | null;
+  last_door_at: string | null;
   battery_low: boolean | null;
   system_ok: boolean | null;
   last_alert_window: string | null;
@@ -210,7 +214,7 @@ export async function POST(req: Request) {
     const { data: homesData, error: homesError } = await admin
       .from("homes")
       .select(
-        "id, home_id, home_name, state, last_seen, last_motion, mode, mode_updated_at, battery_low, system_ok, last_alert_window, last_alert_time"
+        "id, home_id, home_name, state, last_seen, last_motion, mode, mode_updated_at, pending_away_since, last_door_at, battery_low, system_ok, last_alert_window, last_alert_time"
       );
 
     if (homesError) {
@@ -219,6 +223,7 @@ export async function POST(req: Request) {
 
     const homes = (homesData ?? []) as HomeRow[];
 
+    let awaySet = 0;
     let greySet = 0;
     let redSet = 0;
     let greenSet = 0;
@@ -234,6 +239,37 @@ export async function POST(req: Request) {
       if (!homeId) continue;
 
       try {
+        const awayPatch = resolveAwayPatchFromChecks(
+          {
+            mode: rec.mode,
+            pending_away_since: rec.pending_away_since,
+            last_motion: rec.last_motion,
+          },
+          {
+            now,
+            awayDelayMinutes: AWAY_DELAY_MIN,
+          }
+        );
+
+        const fieldsToUpdate: Record<string, unknown> = {
+          ...awayPatch,
+        };
+
+        let willPatch = Object.keys(fieldsToUpdate).length > 0;
+
+        if (awayPatch.mode === "away" && rec.mode !== "away") {
+          awaySet++;
+        }
+
+        const effectiveMode = String(awayPatch.mode ?? rec.mode ?? "").trim().toLowerCase();
+
+        if (effectiveMode === "away") {
+          if (willPatch) {
+            await updateHome(homeId, fieldsToUpdate);
+          }
+          continue;
+        }
+
         const evaluated = evaluateHomeState(
           {
             home_id: rec.home_id,
@@ -257,8 +293,9 @@ export async function POST(req: Request) {
 
         const currentState = String(rec.state ?? "").trim().toLowerCase();
         const statePatch = resolveHomePatchFromEvaluatedState(currentState, evaluated);
-        const fieldsToUpdate: Record<string, unknown> = { ...statePatch };
-        let willPatch = Object.keys(fieldsToUpdate).length > 0;
+
+        Object.assign(fieldsToUpdate, statePatch);
+        willPatch = willPatch || Object.keys(statePatch).length > 0;
 
         if (evaluated.nextState === "grey" && currentState !== "grey") {
           greySet++;
@@ -356,6 +393,7 @@ export async function POST(req: Request) {
     return json(200, {
       ok: true,
       red_enabled: redEnabled,
+      awaySet,
       greySet,
       redSet,
       greenSet,
@@ -368,6 +406,7 @@ export async function POST(req: Request) {
         grey_minutes: GREY_THRESHOLD_MIN,
         red_hours: RED_THRESHOLD_HOURS,
         sms_escalation_minutes: SMS_ESCALATION_MIN,
+        away_delay_minutes: AWAY_DELAY_MIN,
       },
       note: "checks now use state-engine + Supabase homes + alerts",
     });

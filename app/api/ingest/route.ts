@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { buildHomePatchFromIngest } from "@/lib/server/state-engine";
+import {
+  buildHomePatchFromIngest,
+  resolveAwayPatchFromIngest,
+} from "@/lib/server/state-engine";
 
 const INGEST_SECRET = process.env.INGEST_SECRET || "";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+const RETURN_HOME_WINDOW_MINUTES = 5;
 
 function parseIsoOrNull(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -115,7 +120,9 @@ export async function POST(req: Request) {
 
     const { data: existingHome, error: existingErr } = await admin
       .from("homes")
-      .select("id, home_id, state, mode, last_seen, last_motion, last_alert_window, last_alert_time")
+      .select(
+        "id, home_id, state, mode, last_seen, last_motion, last_alert_window, last_alert_time, pending_away_since, last_door_at, mode_updated_at"
+      )
       .eq("home_id", home_id)
       .maybeSingle();
 
@@ -140,7 +147,9 @@ export async function POST(req: Request) {
       parseIsoOrNull(body.last_seen) ??
       null;
 
-    const fields = buildHomePatchFromIngest(
+    const now = new Date();
+
+    const baseFields = buildHomePatchFromIngest(
       {
         motion: motionBool,
         door_open,
@@ -150,8 +159,34 @@ export async function POST(req: Request) {
         last_motion_at: motionIso,
         last_seen_at: seenIso,
       },
-      new Date()
+      now
     ) as Record<string, unknown>;
+
+    const awayFields = resolveAwayPatchFromIngest(
+      {
+        mode: existingHome.mode,
+        last_door_at: existingHome.last_door_at,
+        pending_away_since: existingHome.pending_away_since,
+      },
+      {
+        motion: motionBool,
+        door_open,
+        heartbeat,
+        battery_low: batteryLow,
+        system_ok: systemOk,
+        last_motion_at: motionIso,
+        last_seen_at: seenIso,
+      },
+      {
+        now,
+        returnHomeWindowMinutes: RETURN_HOME_WINDOW_MINUTES,
+      }
+    ) as Record<string, unknown>;
+
+    const fields: Record<string, unknown> = {
+      ...baseFields,
+      ...awayFields,
+    };
 
     const { data: updatedHome, error: updateErr } = await admin
       .from("homes")

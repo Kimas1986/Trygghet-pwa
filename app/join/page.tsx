@@ -21,6 +21,9 @@ function JoinInner() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const codeFromUrl = (sp.get("code") || "").trim();
+  const hasPrefilledCode = codeFromUrl.length > 0;
+
   useEffect(() => {
     const q = sp.get("code");
     if (q) setCode(q);
@@ -78,22 +81,31 @@ function JoinInner() {
   return (
     <main className="min-h-screen bg-gray-50 p-6">
       <div className="mx-auto max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h1 className="text-xl font-semibold text-gray-900">Bli med i hus</h1>
-        <p className="mt-1 text-sm text-gray-600">Skriv inn koden du fikk av administrator.</p>
+        <h1 className="text-xl font-semibold text-gray-900">Bli med via invitasjon</h1>
+        <p className="mt-1 text-sm text-gray-600">
+          Du har fått en invitasjon til et hus i Trygghet. Fyll inn opplysningene dine for å bli lagt til.
+        </p>
 
         <form onSubmit={onSubmit} className="mt-4 grid gap-3">
           <label className="grid gap-1">
-            <span className="text-sm text-gray-700">Kode</span>
+            <span className="text-sm text-gray-700">Invitasjonskode</span>
             <input
-              className="rounded-xl border border-gray-300 px-3 py-2 font-mono text-gray-900 outline-none focus:ring-2 focus:ring-gray-900/10"
+              className="rounded-xl border border-gray-300 px-3 py-2 font-mono text-gray-900 outline-none focus:ring-2 focus:ring-gray-900/10 disabled:bg-gray-50 disabled:text-gray-500"
               value={code}
               onChange={(e) => setCode(e.target.value)}
               required
+              disabled={hasPrefilledCode}
             />
           </label>
 
+          {hasPrefilledCode && (
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+              Invitasjonskoden er hentet fra linken du åpnet.
+            </div>
+          )}
+
           <label className="grid gap-1">
-            <span className="text-sm text-gray-700">Telefon (uten +47)</span>
+            <span className="text-sm text-gray-700">Telefonnummer</span>
             <input
               className="rounded-xl border border-gray-300 px-3 py-2 text-gray-900 outline-none focus:ring-2 focus:ring-gray-900/10"
               value={phone}
