@@ -20,6 +20,7 @@ type OpenAlert = {
 type Member = {
   user_id: string | null;
   role: string | null;
+  email: string | null;
 };
 
 type Home = {
@@ -158,7 +159,14 @@ export default function SystemPage() {
       const systemFail = h.system_ok === false;
       const hasOpenAlert = !!h.open_alert;
 
-      const matchesQuery = !q || name.includes(q) || id.includes(q);
+      const memberMatch = (h.members || []).some((m) => {
+        const email = (m.email || "").toLowerCase();
+        const uid = (m.user_id || "").toLowerCase();
+        const role = (m.role || "").toLowerCase();
+        return email.includes(q) || uid.includes(q) || role.includes(q);
+      });
+
+      const matchesQuery = !q || name.includes(q) || id.includes(q) || memberMatch;
 
       let matchesFilter = true;
 
@@ -294,7 +302,7 @@ export default function SystemPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Søk på husnavn eller home_id"
+              placeholder="Søk på husnavn, home_id, e-post, rolle eller user_id"
               className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
             />
 
@@ -406,17 +414,27 @@ export default function SystemPage() {
                     {h.members.map((m, idx) => (
                       <div
                         key={`${h.home_id}-${m.user_id ?? "unknown"}-${idx}`}
-                        className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm"
+                        className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm"
                       >
-                        <div className="font-mono text-gray-700">{shortUserId(m.user_id)}</div>
-                        <div
-                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                            (m.role || "").toLowerCase() === "admin"
-                              ? "bg-gray-900 text-white"
-                              : "bg-gray-200 text-gray-800"
-                          }`}
-                        >
-                          {m.role || "—"}
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-gray-900">
+                              {m.email || "Ukjent e-post"}
+                            </div>
+                            <div className="font-mono text-xs text-gray-500">
+                              {shortUserId(m.user_id)}
+                            </div>
+                          </div>
+
+                          <div
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                              (m.role || "").toLowerCase() === "admin"
+                                ? "bg-gray-900 text-white"
+                                : "bg-gray-200 text-gray-800"
+                            }`}
+                          >
+                            {m.role || "—"}
+                          </div>
                         </div>
                       </div>
                     ))}

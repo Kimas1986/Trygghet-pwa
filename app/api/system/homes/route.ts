@@ -62,7 +62,9 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const homeIds = (homes ?? []).map((h) => String(h.home_id || "").trim()).filter(Boolean);
+    const homeIds = (homes ?? [])
+      .map((h) => String(h.home_id || "").trim())
+      .filter(Boolean);
 
     let openAlertsByHome: Record<
       string,
@@ -85,6 +87,7 @@ export async function GET(req: Request) {
       Array<{
         user_id: string | null;
         role: string | null;
+        email: string | null;
       }>
     > = {};
 
@@ -132,7 +135,7 @@ export async function GET(req: Request) {
         }
       }
 
-      const { data: members, error: membersError } = await supabase
+      const { data: memberships, error: membersError } = await supabase
         .from("memberships")
         .select(`
           home_id,
@@ -147,8 +150,35 @@ export async function GET(req: Request) {
         return NextResponse.json({ error: membersError.message }, { status: 500 });
       }
 
-      for (const member of members ?? []) {
+      const uniqueUserIds = Array.from(
+        new Set(
+          (memberships ?? [])
+            .map((m) => String(m.user_id || "").trim())
+            .filter(Boolean)
+        )
+      );
+
+      const emailByUserId: Record<string, string | null> = {};
+
+      await Promise.all(
+        uniqueUserIds.map(async (userId) => {
+          try {
+            const { data, error: authErr } = await supabase.auth.admin.getUserById(userId);
+            if (authErr) {
+              emailByUserId[userId] = null;
+              return;
+            }
+            emailByUserId[userId] = data.user?.email ?? null;
+          } catch {
+            emailByUserId[userId] = null;
+          }
+        })
+      );
+
+      for (const member of memberships ?? []) {
         const homeId = String(member.home_id || "").trim();
+        const userId = String(member.user_id || "").trim();
+
         if (!homeId) continue;
 
         if (!membersByHome[homeId]) {
@@ -156,18 +186,24 @@ export async function GET(req: Request) {
         }
 
         membersByHome[homeId].push({
-          user_id: member.user_id ?? null,
+          user_id: userId || null,
           role: member.role ?? null,
+          email: userId ? emailByUserId[userId] ?? null : null,
         });
       }
     }
 
-    const enrichedHomes = (homes ?? []).map((home) => ({
-      ...home,
-      open_alert: openAlertsByHome[String(home.home_id || "").trim()] ?? null,
-      members: membersByHome[String(home.home_id || "").trim()] ?? [],
-      members_count: (membersByHome[String(home.home_id || "").trim()] ?? []).length,
-    }));
+    const enrichedHomes = (homes ?? []).map((home) => {
+      const homeId = String(home.home_id || "").trim();
+      const members = membersByHome[homeId] ?? [];
+
+      return {
+        ...home,
+        open_alert: openAlertsByHome[homeId] ?? null,
+        members,
+        members_count: members.length,
+      };
+    });
 
     return NextResponse.json({
       ok: true,
