@@ -91,6 +91,15 @@ export async function GET(req: Request) {
       }>
     > = {};
 
+    let pushCountByHome: Record<string, number> = {};
+    let contactsByHome: Record<
+      string,
+      Array<{
+        phone_e164: string | null;
+        sms_enabled: boolean | null;
+      }>
+    > = {};
+
     if (homeIds.length > 0) {
       const { data: openAlerts, error: alertsError } = await supabase
         .from("alerts")
@@ -191,17 +200,96 @@ export async function GET(req: Request) {
           email: userId ? emailByUserId[userId] ?? null : null,
         });
       }
+
+      if (uniqueUserIds.length > 0) {
+        const { data: pushSubs, error: pushError } = await supabase
+          .from("push_subscriptions")
+          .select("user_id, home_id")
+          .or(
+            [
+              `user_id.in.(${uniqueUserIds.join(",")})`,
+              `home_id.in.(${homeIds.join(",")})`,
+            ].join(",")
+          );
+
+        if (pushError) {
+          return NextResponse.json({ error: pushError.message }, { status: 500 });
+        }
+
+        for (const homeId of homeIds) {
+          pushCountByHome[homeId] = 0;
+        }
+
+        const memberUserIdsByHome: Record<string, Set<string>> = {};
+        for (const homeId of homeIds) {
+          memberUserIdsByHome[homeId] = new Set(
+            (membersByHome[homeId] ?? [])
+              .map((m) => String(m.user_id || "").trim())
+              .filter(Boolean)
+          );
+        }
+
+        for (const sub of pushSubs ?? []) {
+          const subHomeId = String(sub.home_id || "").trim();
+          const subUserId = String(sub.user_id || "").trim();
+
+          if (subHomeId && pushCountByHome[subHomeId] !== undefined) {
+            pushCountByHome[subHomeId] += 1;
+            continue;
+          }
+
+          if (subUserId) {
+            for (const homeId of homeIds) {
+              if (memberUserIdsByHome[homeId]?.has(subUserId)) {
+                pushCountByHome[homeId] = (pushCountByHome[homeId] ?? 0) + 1;
+              }
+            }
+          }
+        }
+      }
+
+      const { data: contacts, error: contactsError } = await supabase
+        .from("contact_methods")
+        .select(`
+          home_id,
+          phone_e164,
+          sms_enabled
+        `)
+        .in("home_id", homeIds)
+        .order("home_id");
+
+      if (contactsError) {
+        return NextResponse.json({ error: contactsError.message }, { status: 500 });
+      }
+
+      for (const row of contacts ?? []) {
+        const homeId = String(row.home_id || "").trim();
+        if (!homeId) continue;
+
+        if (!contactsByHome[homeId]) {
+          contactsByHome[homeId] = [];
+        }
+
+        contactsByHome[homeId].push({
+          phone_e164: row.phone_e164 ?? null,
+          sms_enabled: row.sms_enabled ?? null,
+        });
+      }
     }
 
     const enrichedHomes = (homes ?? []).map((home) => {
       const homeId = String(home.home_id || "").trim();
       const members = membersByHome[homeId] ?? [];
+      const contacts = contactsByHome[homeId] ?? [];
 
       return {
         ...home,
         open_alert: openAlertsByHome[homeId] ?? null,
         members,
         members_count: members.length,
+        push_devices_count: pushCountByHome[homeId] ?? 0,
+        contact_methods: contacts,
+        sms_contacts_count: contacts.filter((c) => c.sms_enabled === true).length,
       };
     });
 

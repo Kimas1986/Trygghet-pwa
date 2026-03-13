@@ -23,6 +23,11 @@ type Member = {
   email: string | null;
 };
 
+type ContactMethod = {
+  phone_e164: string | null;
+  sms_enabled: boolean | null;
+};
+
 type Home = {
   home_id: string;
   home_name: string | null;
@@ -37,6 +42,9 @@ type Home = {
   open_alert: OpenAlert;
   members: Member[];
   members_count: number;
+  push_devices_count: number;
+  contact_methods: ContactMethod[];
+  sms_contacts_count: number;
 };
 
 type FilterKey =
@@ -115,6 +123,36 @@ export default function SystemPage() {
     setLoading(false);
   }
 
+  async function testPush(home_id: string) {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      router.replace("/login");
+      return;
+    }
+
+    const res = await fetch("/api/system/test-push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        home_id,
+      }),
+    });
+
+    const j = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      alert(j?.error || "Test push feilet");
+      return;
+    }
+
+    alert(`Push sendt til ${home_id} (${j.sent} enheter)`);
+  }
+
   useEffect(() => {
     load();
     const t = setInterval(load, 15000);
@@ -166,7 +204,14 @@ export default function SystemPage() {
         return email.includes(q) || uid.includes(q) || role.includes(q);
       });
 
-      const matchesQuery = !q || name.includes(q) || id.includes(q) || memberMatch;
+      const contactMatch = (h.contact_methods || []).some((c) => {
+        const phone = (c.phone_e164 || "").toLowerCase();
+        const sms = c.sms_enabled === true ? "sms på" : "sms av";
+        return phone.includes(q) || sms.includes(q);
+      });
+
+      const matchesQuery =
+        !q || name.includes(q) || id.includes(q) || memberMatch || contactMatch;
 
       let matchesFilter = true;
 
@@ -217,81 +262,135 @@ export default function SystemPage() {
           <button
             type="button"
             onClick={() => setFilter("all")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "all" ? "border-gray-900 bg-gray-900 text-white" : "bg-white"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "all" ? "border-gray-900 bg-gray-900 text-white" : "bg-white"
+            }`}
           >
-            <div className={`text-xs ${filter === "all" ? "text-gray-200" : "text-gray-500"}`}>Totalt</div>
+            <div className={`text-xs ${filter === "all" ? "text-gray-200" : "text-gray-500"}`}>
+              Totalt
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.total}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("open_alert")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "open_alert" ? "border-red-950 bg-red-950 text-white" : "border-red-300 bg-red-100"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "open_alert"
+                ? "border-red-950 bg-red-950 text-white"
+                : "border-red-300 bg-red-100"
+            }`}
           >
-            <div className={`text-xs ${filter === "open_alert" ? "text-red-100" : "text-red-800"}`}>Åpne alerts</div>
+            <div
+              className={`text-xs ${filter === "open_alert" ? "text-red-100" : "text-red-800"}`}
+            >
+              Åpne alerts
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.openAlerts}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("red")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "red" ? "border-red-900 bg-red-900 text-white" : "border-red-200 bg-red-50"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "red" ? "border-red-900 bg-red-900 text-white" : "border-red-200 bg-red-50"
+            }`}
           >
-            <div className={`text-xs ${filter === "red" ? "text-red-100" : "text-red-700"}`}>Røde</div>
+            <div className={`text-xs ${filter === "red" ? "text-red-100" : "text-red-700"}`}>
+              Røde
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.red}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("grey")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "grey" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "grey" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white"
+            }`}
           >
-            <div className={`text-xs ${filter === "grey" ? "text-gray-200" : "text-gray-500"}`}>Grå</div>
+            <div className={`text-xs ${filter === "grey" ? "text-gray-200" : "text-gray-500"}`}>
+              Grå
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.grey}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("green")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "green" ? "border-green-900 bg-green-900 text-white" : "border-green-200 bg-green-50"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "green"
+                ? "border-green-900 bg-green-900 text-white"
+                : "border-green-200 bg-green-50"
+            }`}
           >
-            <div className={`text-xs ${filter === "green" ? "text-green-100" : "text-green-700"}`}>Grønne</div>
+            <div className={`text-xs ${filter === "green" ? "text-green-100" : "text-green-700"}`}>
+              Grønne
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.green}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("away")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "away" ? "border-amber-900 bg-amber-900 text-white" : "border-amber-200 bg-amber-50"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "away"
+                ? "border-amber-900 bg-amber-900 text-white"
+                : "border-amber-200 bg-amber-50"
+            }`}
           >
-            <div className={`text-xs ${filter === "away" ? "text-amber-100" : "text-amber-700"}`}>Away</div>
+            <div className={`text-xs ${filter === "away" ? "text-amber-100" : "text-amber-700"}`}>
+              Away
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.away}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("offline")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "offline" ? "border-gray-800 bg-gray-800 text-white" : "border-gray-300 bg-gray-100"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "offline"
+                ? "border-gray-800 bg-gray-800 text-white"
+                : "border-gray-300 bg-gray-100"
+            }`}
           >
-            <div className={`text-xs ${filter === "offline" ? "text-gray-200" : "text-gray-700"}`}>Offline</div>
+            <div className={`text-xs ${filter === "offline" ? "text-gray-200" : "text-gray-700"}`}>
+              Offline
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.offline}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("battery_low")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "battery_low" ? "border-yellow-800 bg-yellow-800 text-white" : "border-yellow-200 bg-yellow-50"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "battery_low"
+                ? "border-yellow-800 bg-yellow-800 text-white"
+                : "border-yellow-200 bg-yellow-50"
+            }`}
           >
-            <div className={`text-xs ${filter === "battery_low" ? "text-yellow-100" : "text-yellow-700"}`}>Lavt batteri</div>
+            <div
+              className={`text-xs ${filter === "battery_low" ? "text-yellow-100" : "text-yellow-700"}`}
+            >
+              Lavt batteri
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.batteryLow}</div>
           </button>
 
           <button
             type="button"
             onClick={() => setFilter("system_fail")}
-            className={`rounded-2xl border p-4 text-left shadow-sm ${filter === "system_fail" ? "border-orange-900 bg-orange-900 text-white" : "border-orange-200 bg-orange-50"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm ${
+              filter === "system_fail"
+                ? "border-orange-900 bg-orange-900 text-white"
+                : "border-orange-200 bg-orange-50"
+            }`}
           >
-            <div className={`text-xs ${filter === "system_fail" ? "text-orange-100" : "text-orange-700"}`}>Systemfeil</div>
+            <div
+              className={`text-xs ${filter === "system_fail" ? "text-orange-100" : "text-orange-700"}`}
+            >
+              Systemfeil
+            </div>
             <div className="mt-1 text-2xl font-semibold">{stats.systemFail}</div>
           </button>
         </div>
@@ -302,7 +401,7 @@ export default function SystemPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Søk på husnavn, home_id, e-post, rolle eller user_id"
+              placeholder="Søk på husnavn, home_id, e-post, rolle, user_id eller telefon"
               className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
             />
 
@@ -330,25 +429,32 @@ export default function SystemPage() {
 
         <div className="grid gap-3">
           {filteredHomes.map((h) => (
-            <div
-              key={h.home_id}
-              className="rounded-2xl border bg-white p-4 shadow-sm"
-            >
+            <div key={h.home_id} className="rounded-2xl border bg-white p-4 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <div className="font-semibold text-gray-900">{h.home_name || h.home_id}</div>
                   <div className="text-sm text-gray-600">{h.home_id}</div>
                 </div>
 
-                {h.open_alert && (
-                  <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
-                    <div className="font-semibold">Åpen alert</div>
-                    <div>Type: {h.open_alert.type || "—"}</div>
-                    <div>Startet: {formatDateTime(h.open_alert.triggered_at)}</div>
-                    <div>Ack: {h.open_alert.acknowledged ? "Ja" : "Nei"}</div>
-                    <div>SMS sendt: {h.open_alert.escalation_sent ? "Ja" : "Nei"}</div>
-                  </div>
-                )}
+                <div className="flex flex-col gap-2 sm:items-end">
+                  <button
+                    type="button"
+                    onClick={() => testPush(h.home_id)}
+                    className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs text-gray-900 hover:bg-gray-50"
+                  >
+                    Test push
+                  </button>
+
+                  {h.open_alert && (
+                    <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+                      <div className="font-semibold">Åpen alert</div>
+                      <div>Type: {h.open_alert.type || "—"}</div>
+                      <div>Startet: {formatDateTime(h.open_alert.triggered_at)}</div>
+                      <div>Ack: {h.open_alert.acknowledged ? "Ja" : "Nei"}</div>
+                      <div>SMS sendt: {h.open_alert.escalation_sent ? "Ja" : "Nei"}</div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
@@ -401,47 +507,91 @@ export default function SystemPage() {
                 </div>
               </div>
 
-              <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-3">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-gray-900">Medlemmer</div>
-                  <div className="text-xs text-gray-600">
-                    Antall: {h.members_count ?? h.members?.length ?? 0}
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-gray-900">Medlemmer</div>
+                    <div className="text-xs text-gray-600">
+                      Antall: {h.members_count ?? h.members?.length ?? 0}
+                    </div>
                   </div>
-                </div>
 
-                {h.members && h.members.length > 0 ? (
-                  <div className="grid gap-2">
-                    {h.members.map((m, idx) => (
-                      <div
-                        key={`${h.home_id}-${m.user_id ?? "unknown"}-${idx}`}
-                        className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate font-medium text-gray-900">
-                              {m.email || "Ukjent e-post"}
+                  {h.members && h.members.length > 0 ? (
+                    <div className="grid gap-2">
+                      {h.members.map((m, idx) => (
+                        <div
+                          key={`${h.home_id}-${m.user_id ?? "unknown"}-${idx}`}
+                          className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-gray-900">
+                                {m.email || "Ukjent e-post"}
+                              </div>
+                              <div className="font-mono text-xs text-gray-500">
+                                {shortUserId(m.user_id)}
+                              </div>
                             </div>
-                            <div className="font-mono text-xs text-gray-500">
-                              {shortUserId(m.user_id)}
-                            </div>
-                          </div>
 
-                          <div
-                            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
-                              (m.role || "").toLowerCase() === "admin"
-                                ? "bg-gray-900 text-white"
-                                : "bg-gray-200 text-gray-800"
-                            }`}
-                          >
-                            {m.role || "—"}
+                            <div
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                (m.role || "").toLowerCase() === "admin"
+                                  ? "bg-gray-900 text-white"
+                                  : "bg-gray-200 text-gray-800"
+                              }`}
+                            >
+                              {m.role || "—"}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">Ingen medlemmer funnet</div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-gray-900">Varslingsmottakere</div>
+                    <div className="text-xs text-gray-600">
+                      Push: {h.push_devices_count ?? 0} · SMS: {h.sms_contacts_count ?? 0}
+                    </div>
                   </div>
-                ) : (
-                  <div className="text-sm text-gray-500">Ingen medlemmer funnet</div>
-                )}
+
+                  <div className="mb-3 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm">
+                    <div>
+                      <b>Push-enheter</b>
+                    </div>
+                    <div className="mt-1 text-gray-700">{h.push_devices_count ?? 0}</div>
+                  </div>
+
+                  {h.contact_methods && h.contact_methods.length > 0 ? (
+                    <div className="grid gap-2">
+                      {h.contact_methods.map((c, idx) => (
+                        <div
+                          key={`${h.home_id}-contact-${c.phone_e164 ?? "unknown"}-${idx}`}
+                          className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-mono text-gray-800">{c.phone_e164 || "Ukjent nummer"}</div>
+                            <div
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                c.sms_enabled === true
+                                  ? "bg-green-600 text-white"
+                                  : "bg-gray-200 text-gray-800"
+                              }`}
+                            >
+                              {c.sms_enabled === true ? "SMS på" : "SMS av"}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">Ingen SMS-kontakter funnet</div>
+                  )}
+                </div>
               </div>
             </div>
           ))}
