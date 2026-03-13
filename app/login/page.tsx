@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { enableMobileInputScroll } from "@/lib/scrollInputIntoView";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,6 +12,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    enableMobileInputScroll();
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -35,8 +40,8 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 p-6">
-      <div className="mx-auto max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+    <main className="min-h-[100svh] overflow-y-auto bg-gray-50 px-4 py-6 sm:p-6">
+      <div className="mx-auto w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
         <h1 className="text-xl font-semibold text-gray-900">Logg inn</h1>
         <p className="mt-1 text-sm text-gray-600">Bruk e-post og passord.</p>
 

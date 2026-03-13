@@ -1,8 +1,9 @@
 ﻿"use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { enableMobileInputScroll } from "@/lib/scrollInputIntoView";
 
 function cleanPhone(input: string) {
   return (input || "").replace(/\s+/g, "").replace(/[^\d+]/g, "");
@@ -18,6 +19,10 @@ export default function RegisterPage() {
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    enableMobileInputScroll();
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -43,14 +48,15 @@ export default function RegisterPage() {
         return;
       }
 
-      // Auto-login (vi bruker server-side createUser med email_confirm=true)
       const { error: signInErr } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
 
       if (signInErr) {
-        setMsg(`Bruker opprettet, men innlogging feilet: ${signInErr.message}. Prøv å logge inn.`);
+        setMsg(
+          `Bruker opprettet, men innlogging feilet: ${signInErr.message}. Prøv å logge inn.`
+        );
         setTimeout(() => router.push("/login"), 900);
         return;
       }
@@ -62,9 +68,11 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 p-6">
-      <div className="mx-auto max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h1 className="text-xl font-semibold text-gray-900">Opprett admin og koble boks</h1>
+    <main className="min-h-[100svh] overflow-y-auto bg-gray-50 px-4 py-6 sm:p-6">
+      <div className="mx-auto w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h1 className="text-xl font-semibold text-gray-900">
+          Opprett admin og koble boks
+        </h1>
         <p className="mt-1 text-sm text-gray-600">
           Du må ha produktkoden fra boksen for å opprette et hjem.
         </p>
@@ -108,7 +116,9 @@ export default function RegisterPage() {
           </label>
 
           <label className="grid gap-1">
-            <span className="text-sm text-gray-700">Produktkode (står på boksen)</span>
+            <span className="text-sm text-gray-700">
+              Produktkode (står på boksen)
+            </span>
             <input
               className="rounded-xl border border-gray-300 px-3 py-2 font-mono text-gray-900 outline-none focus:ring-2 focus:ring-gray-900/10"
               value={productCode}

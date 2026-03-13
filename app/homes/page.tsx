@@ -270,6 +270,7 @@ export default function HomesPage() {
   const [renameValueByHome, setRenameValueByHome] = useState<Record<string, string>>({});
 
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isSystemAdmin, setIsSystemAdmin] = useState(false);
 
   const [origin, setOrigin] = useState<string>("");
 
@@ -312,6 +313,16 @@ export default function HomesPage() {
         return;
       }
 
+      const { data: adminRow } = await supabase
+        .from("system_admins")
+        .select("user_id")
+        .eq("user_id", s.user.id)
+        .maybeSingle();
+
+      if (alive) {
+        setIsSystemAdmin(Boolean(adminRow));
+      }
+
       setLoading(false);
     }
 
@@ -319,7 +330,10 @@ export default function HomesPage() {
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
-      if (!newSession) router.replace("/login");
+      if (!newSession) {
+        setIsSystemAdmin(false);
+        router.replace("/login");
+      }
     });
 
     return () => {
@@ -370,11 +384,6 @@ export default function HomesPage() {
   }, [session]);
 
   const hasHomes = homes.length > 0;
-
-  const anyAdmin = useMemo(
-    () => homes.some((h) => (h.role || "").toLowerCase() === "admin"),
-    [homes]
-  );
 
   async function onLogout() {
     await supabase.auth.signOut();
@@ -603,6 +612,15 @@ export default function HomesPage() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
+            {isSystemAdmin && (
+              <Link
+                href="/system"
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50"
+              >
+                System
+              </Link>
+            )}
+
             {!pushReady && (
               <button
                 type="button"
