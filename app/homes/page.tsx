@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -243,6 +243,25 @@ async function ensurePushSubscription(accessToken: string) {
   if (!res.ok) throw new Error(j?.error || `Subscribe feilet (${res.status})`);
 }
 
+function isRunningAsInstalledApp() {
+  if (typeof window === "undefined") return false;
+
+  const standaloneMatch =
+    window.matchMedia?.("(display-mode: standalone)")?.matches ?? false;
+
+  const iosStandalone =
+    typeof (window.navigator as any).standalone === "boolean" &&
+    (window.navigator as any).standalone === true;
+
+  return standaloneMatch || iosStandalone;
+}
+
+function isIOSDevice() {
+  if (typeof window === "undefined") return false;
+  const ua = window.navigator.userAgent || window.navigator.vendor || "";
+  return /iPad|iPhone|iPod/.test(ua);
+}
+
 export default function HomesPage() {
   const router = useRouter();
 
@@ -271,6 +290,8 @@ export default function HomesPage() {
 
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
+  const [isInstalledApp, setIsInstalledApp] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
 
   const [origin, setOrigin] = useState<string>("");
 
@@ -278,9 +299,12 @@ export default function HomesPage() {
 
   useEffect(() => {
     setOrigin(window.location.origin);
+    setIsIOS(isIOSDevice());
   }, []);
 
   useEffect(() => {
+    setIsInstalledApp(isRunningAsInstalledApp());
+
     const handler = (e: Event) => {
       e.preventDefault();
       setInstallPrompt(e as BeforeInstallPromptEvent);
@@ -418,6 +442,9 @@ export default function HomesPage() {
 
     if (choice.outcome === "accepted") {
       setInstallPrompt(null);
+      setTimeout(() => {
+        setIsInstalledApp(isRunningAsInstalledApp());
+      }, 1000);
     }
   }
 
@@ -619,17 +646,6 @@ export default function HomesPage() {
               >
                 System
               </Link>
-            )}
-
-            {!pushReady && (
-              <button
-                type="button"
-                onClick={onEnablePush}
-                disabled={pushBusy}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50 disabled:opacity-60"
-              >
-                {pushBusy ? "Aktiverer…" : "Aktiver push-varsler"}
-              </button>
             )}
 
             <button
@@ -946,7 +962,29 @@ export default function HomesPage() {
       </div>
 
       <div className="fixed bottom-4 left-0 right-0 z-20 flex flex-col items-center gap-2 px-4">
-        {!pushReady && (
+        {!isInstalledApp && installPrompt && (
+          <button
+            type="button"
+            onClick={installApp}
+            className="rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white shadow-lg hover:bg-gray-800"
+          >
+            📲 Installer Trygghet
+          </button>
+        )}
+
+        {!isInstalledApp && !installPrompt && isIOS && (
+          <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-lg">
+            På iPhone: åpne i Safari, trykk Del og velg <span className="font-semibold">Legg til på Hjem-skjerm</span>.
+          </div>
+        )}
+
+        {!isInstalledApp && !installPrompt && !isIOS && (
+          <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-lg">
+            Installer appen fra nettleserens meny for å få varsler.
+          </div>
+        )}
+
+        {isInstalledApp && !pushReady && (
           <button
             type="button"
             onClick={onEnablePush}
@@ -954,16 +992,6 @@ export default function HomesPage() {
             className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-900 shadow-lg hover:bg-gray-50 disabled:opacity-60"
           >
             {pushBusy ? "Aktiverer…" : "🔔 Aktiver push-varsler"}
-          </button>
-        )}
-
-        {installPrompt && (
-          <button
-            type="button"
-            onClick={installApp}
-            className="rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white shadow-lg hover:bg-gray-800"
-          >
-            📲 Installer Trygghet
           </button>
         )}
       </div>
