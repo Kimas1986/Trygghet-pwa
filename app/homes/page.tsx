@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import StatusBadge from "@/components/StatusBadge";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -74,13 +75,11 @@ function stateMeta(state: string | null) {
 
   if (s === "red") {
     return {
-      label: "Rød",
       dot: "bg-red-700",
       card: "border-red-400 bg-red-50",
       ring: "ring-red-200",
       title: "text-red-950",
       sub: "text-red-900/80",
-      pill: "bg-white/80 border-red-300 text-red-900",
       bar: "bg-red-700",
       cta: "bg-red-700 hover:bg-red-800 text-white",
     };
@@ -88,26 +87,22 @@ function stateMeta(state: string | null) {
 
   if (s === "green") {
     return {
-      label: "Grønn",
       dot: "bg-green-600",
       card: "border-green-200 bg-green-50",
       ring: "ring-green-100",
       title: "text-green-950",
       sub: "text-green-900/80",
-      pill: "bg-white/70 border-green-200 text-green-900",
       bar: "bg-green-600",
       cta: "bg-gray-900 hover:bg-gray-800 text-white",
     };
   }
 
   return {
-    label: "Grå",
     dot: "bg-gray-400",
     card: "border-gray-200 bg-white",
     ring: "ring-gray-100",
     title: "text-gray-900",
     sub: "text-gray-700",
-    pill: "bg-gray-50 border-gray-200 text-gray-700",
     bar: "bg-gray-300",
     cta: "bg-gray-900 hover:bg-gray-800 text-white",
   };
@@ -217,7 +212,7 @@ async function ensurePushSubscription(accessToken: string) {
       }),
       12000,
       "Oppretter push subscription"
-    ));
+    )));
 
   const res = await withTimeout(
     fetch("/api/push/subscribe", {
@@ -703,6 +698,11 @@ export default function HomesPage() {
 
         {homes.map((h) => {
           const stateLower = (h.state || "").toLowerCase();
+          const safeState: "green" | "grey" | "red" =
+            stateLower === "green" || stateLower === "grey" || stateLower === "red"
+              ? stateLower
+              : "grey";
+
           const isRedCard = stateLower === "red";
           const meta = stateMeta(h.state);
 
@@ -731,23 +731,24 @@ export default function HomesPage() {
           return (
             <div
               key={h.home_id}
-              className={`mb-4 rounded-2xl border p-4 shadow-sm ring-1 ${meta.card} ${meta.ring}`}
+              className={`mb-5 rounded-2xl border p-5 shadow-sm ring-1 ${meta.card} ${meta.ring}`}
             >
               <div className="flex gap-3">
                 <div className={`w-2 rounded-full ${meta.bar}`} />
 
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
                         <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} />
+                        <div className={`truncate text-lg font-semibold ${meta.title}`}>{title}</div>
+                      </div>
 
-                        <div className={`truncate text-base font-semibold ${meta.title}`}>{title}</div>
+                      <div className="mt-2">
+                        <StatusBadge state={safeState} />
+                      </div>
 
-                        <span className={`rounded-full border px-2 py-0.5 text-xs ${meta.pill}`}>
-                          {meta.label}
-                        </span>
-
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         {online ? (
                           <span className="rounded-full bg-green-600 px-2 py-0.5 text-xs font-semibold text-white">
                             System online
@@ -764,51 +765,21 @@ export default function HomesPage() {
                           </span>
                         )}
 
-                        {(h.role || "").toLowerCase() === "admin" ? (
+                        {isAdmin ? (
                           <span className="text-xs text-gray-600">Admin</span>
                         ) : (
                           <span className="text-xs text-gray-600">Viewer</span>
                         )}
                       </div>
 
-                      <div className={`mt-1 text-xs ${meta.sub}`}>
+                      <div className={`mt-2 text-xs ${meta.sub}`}>
                         ID: <span className="font-mono">{h.home_id}</span>
                       </div>
-                    </div>
-
-                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-                      <Link
-                        href={`/homes/${encodeURIComponent(h.home_id)}`}
-                        className="rounded-xl border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-white"
-                      >
-                        Vis historikk
-                      </Link>
-
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => openRename(h)}
-                          className="rounded-xl border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-white"
-                        >
-                          Endre navn
-                        </button>
-                      )}
-
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => (isInviteOpen ? setInviteOpenFor(null) : createInvite(h.home_id))}
-                          disabled={inviteBusy === h.home_id}
-                          className={`rounded-xl px-3 py-2 text-sm shadow-sm disabled:opacity-60 ${meta.cta}`}
-                        >
-                          {isInviteOpen ? "Skjul" : inviteBusy === h.home_id ? "Lager…" : "Del link"}
-                        </button>
-                      )}
                     </div>
                   </div>
 
                   {isAdmin && isRenameOpen && (
-                    <div className="mt-4 rounded-2xl border border-gray-200 bg-white/85 p-4 ring-1 ring-black/5">
+                    <div className="mt-5 rounded-2xl border border-gray-200 bg-white/85 p-4 ring-1 ring-black/5">
                       <div className="text-sm font-semibold text-gray-900">Endre navn på hus</div>
 
                       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -846,12 +817,14 @@ export default function HomesPage() {
                   )}
 
                   {isRedCard && (
-                    <div className="mt-4 rounded-2xl border border-red-400 bg-white/90 p-4 shadow-sm">
+                    <div className="mt-5 rounded-2xl border border-red-400 bg-white/90 p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-sm font-semibold text-red-900">Viktig: sjekk huset</div>
+                          <div className="text-sm font-semibold text-red-900">
+                            ⚠️ Ingen aktivitet registrert
+                          </div>
                           <div className="mt-1 text-sm text-gray-900">
-                            Dette huset er rødt. Når du har sjekket, trykk knappen.
+                            Vennligst sjekk situasjonen
                           </div>
 
                           {alertStartedAt ? (
@@ -891,10 +864,40 @@ export default function HomesPage() {
                     </div>
                   )}
 
-                  <div className="mt-4 rounded-xl bg-white/80 p-3 ring-1 ring-black/5">
-                    <div className="text-xs text-gray-600">Sist bevegelse</div>
+                  <div className="mt-5 rounded-xl bg-white/80 p-3 ring-1 ring-black/5">
+                    <div className="text-xs text-gray-600">Sist aktivitet</div>
                     <div className="mt-1 text-sm font-semibold text-gray-900">{formatDate(h.last_motion)}</div>
                     {motionAgo && <div className="mt-0.5 text-xs text-gray-600">{motionAgo}</div>}
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap gap-2 border-t border-gray-200 pt-4">
+                    <Link
+                      href={`/homes/${encodeURIComponent(h.home_id)}`}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50"
+                    >
+                      Historikk
+                    </Link>
+
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => (isInviteOpen ? setInviteOpenFor(null) : createInvite(h.home_id))}
+                        disabled={inviteBusy === h.home_id}
+                        className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50 disabled:opacity-60"
+                      >
+                        {isInviteOpen ? "Skjul" : inviteBusy === h.home_id ? "Lager…" : "Del kode"}
+                      </button>
+                    )}
+
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => openRename(h)}
+                        className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50"
+                      >
+                        Endre navn
+                      </button>
+                    )}
                   </div>
 
                   {inviteError && (
