@@ -212,7 +212,7 @@ async function ensurePushSubscription(accessToken: string) {
       }),
       12000,
       "Oppretter push subscription"
-    )));
+    ));
 
   const res = await withTimeout(
     fetch("/api/push/subscribe", {
