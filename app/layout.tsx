@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   themeColor: "#111827",
 
   icons: {
-    icon: "/favicon.ico",
+    icon: "/favicon-32.png",
     apple: "/apple-touch-icon.png",
   },
 
