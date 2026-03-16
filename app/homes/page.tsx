@@ -918,14 +918,7 @@ export default function HomesPage() {
                           <div className="mt-1 break-all text-sm text-gray-900">{link || "—"}</div>
                         </div>
 
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                          <div className="text-xs text-gray-600">Invitasjonskode</div>
-                          <div className="mt-1 font-mono text-base font-semibold tracking-wider text-gray-900">
-                            {code || "—"}
-                          </div>
-                        </div>
-
-                        <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+                        <div className="mt-1">
                           <button
                             type="button"
                             onClick={async () => {
@@ -933,21 +926,9 @@ export default function HomesPage() {
                                 await navigator.clipboard.writeText(link);
                               } catch {}
                             }}
-                            className="rounded-xl bg-gray-900 px-3 py-2 text-sm text-white shadow-sm hover:bg-gray-800"
+                            className="w-full rounded-xl bg-gray-900 px-3 py-2 text-sm text-white shadow-sm hover:bg-gray-800"
                           >
                             Kopier link
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(code);
-                              } catch {}
-                            }}
-                            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm hover:bg-gray-50"
-                          >
-                            Kopier kode
                           </button>
                         </div>
 
