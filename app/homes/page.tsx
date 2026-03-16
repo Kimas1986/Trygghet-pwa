@@ -909,7 +909,7 @@ export default function HomesPage() {
                   {isAdmin && isInviteOpen && (
                     <div className="mt-4 rounded-2xl border border-gray-200 bg-white/80 p-4 ring-1 ring-black/5">
                       <div className="text-sm text-gray-700">
-                        Send linken til pårørende. Koden blir forhåndsutfylt.
+                        Send linken til kontaktpersonen. Koden blir forhåndsutfylt.
                       </div>
 
                       <div className="mt-3 grid gap-2">
@@ -933,7 +933,7 @@ export default function HomesPage() {
                         </div>
 
                         <div className="text-xs text-gray-500">
-                          Tips: lim inn linken i SMS/WhatsApp. Pårørende fyller inn telefon + e-post/passord på join.
+                          Tips: lim inn linken i SMS/WhatsApp. Kontaktpersonen fyller inn telefon + e-post/passord på join.
                         </div>
                       </div>
                     </div>
