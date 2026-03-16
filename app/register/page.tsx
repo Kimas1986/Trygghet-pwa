@@ -1,4 +1,4 @@
-ï»¿"use client";
+"use client";
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -55,7 +55,7 @@ export default function RegisterPage() {
 
       if (signInErr) {
         setMsg(
-          `Bruker opprettet, men innlogging feilet: ${signInErr.message}. PrÃ¸v Ã¥ logge inn.`
+          `Bruker opprettet, men innlogging feilet: ${signInErr.message}. Prøv å logge inn.`
         );
         setTimeout(() => router.push("/login"), 900);
         return;
@@ -74,7 +74,7 @@ export default function RegisterPage() {
           Opprett admin og koble boks
         </h1>
         <p className="mt-1 text-sm text-gray-600">
-          Du mÃ¥ ha produktkoden fra boksen for Ã¥ opprette et hjem.
+          Du må ha produktkoden fra boksen for å opprette et hjem.
         </p>
 
         <form onSubmit={onSubmit} className="mt-4 grid gap-3">
@@ -117,7 +117,7 @@ export default function RegisterPage() {
 
           <label className="grid gap-1">
             <span className="text-sm text-gray-700">
-              Produktkode (stÃ¥r pÃ¥ boksen)
+              Produktkode (står på boksen)
             </span>
             <input
               className="rounded-xl border border-gray-300 px-3 py-2 font-mono text-gray-900 outline-none focus:ring-2 focus:ring-gray-900/10"
@@ -133,7 +133,7 @@ export default function RegisterPage() {
             disabled={loading}
             className="mt-2 rounded-xl bg-gray-900 px-3 py-2 text-sm text-white shadow-sm hover:bg-gray-800 disabled:opacity-60"
           >
-            {loading ? "Oppretterâ€¦" : "Opprett og koble boks"}
+            {loading ? "Oppretter…" : "Opprett og koble boks"}
           </button>
 
           <div className="text-sm text-gray-700">
