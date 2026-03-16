@@ -21,14 +21,7 @@ export const metadata: Metadata = {
     description: "Status og varsler for hus du følger",
     url: "https://trygghet.vercel.app",
     siteName: "Trygghet",
-    images: [
-      {
-        url: "/og-image.png",
-        width: 1200,
-        height: 630,
-        alt: "Trygghet",
-      },
-    ],
+    images: ["/og-image"],
     locale: "no_NO",
     type: "website",
   },
@@ -37,7 +30,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Trygghet",
     description: "Status og varsler for hus du følger",
-    images: ["/og-image.png"],
+    images: ["/og-image"],
   },
 };
 
